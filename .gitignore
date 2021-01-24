@@ -1,0 +1,16 @@
+.dub
+docs.json
+__dummy.html
+docs/
+/mandelbrot-experiment
+mandelbrot-experiment.so
+mandelbrot-experiment.dylib
+mandelbrot-experiment.dll
+mandelbrot-experiment.a
+mandelbrot-experiment.lib
+mandelbrot-experiment-test-*
+*.exe
+*.o
+*.obj
+*.lst
+out.bmp

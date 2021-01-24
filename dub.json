@@ -1,0 +1,12 @@
+{
+	"authors": [
+		"Leamare"
+	],
+	"copyright": "Copyright © 2021, Leamare",
+	"dependencies": {
+		"dlib": "~>0.20.0"
+	},
+	"description": "Mandelbrot set D experiment",
+	"license": "GPL-3.0",
+	"name": "mandelbrot-experiment"
+}
