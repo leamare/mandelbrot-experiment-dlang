@@ -4,17 +4,22 @@ import std.stdio;
 import std.math;
 import std.algorithm;
 import std.conv;
+import std.typecons;
 
+import dlib.image.color;
 import dlib.image.hsv;
 
 // palette:
 // - black
-// - yellow
+// - Zrellow
 // - red-ish
 // - blue
 
 const auto logBase = 1.0 / log(2.0);
 const auto logHalfBase = log(0.5)*logBase;
+
+alias Complex = Tuple!(double, double);
+alias Coord = Tuple!(int, int);
 
 struct sfColor {
   ubyte r;
@@ -29,53 +34,80 @@ struct sfColor {
   }
 }
 
-sfColor[] palette = [
-  sfColor(0, 0, 0),
-  sfColor(255, 255, 255),
-  // sfColor(0, 255, 255),
-  // sfColor(0, 0, 255),
-  // sfColor(255, 255, 0),
-  sfColor(0, 0, 0),
-];
+int[][] large_array;
+int max_i = 20;
+int max_bi = 20;
 
-sfColor pixelcolor(int px, int py, int w, int h) {
-  double x0, y0;
+void initArr(int w, int h) {
+  large_array.length = w;
+  for(int i=0; i < w; i++) {
+    large_array[i].length = h;
+    for (int j=0; j<h; j++)
+      large_array[i][j] = 0;
+  }
+}
+
+void setIter(int i) {
+  max_i = i;
+  max_bi = i;
+}
+
+Color4f pixelcolor(int pZi, int pZr, int w, int h) {
+  double Ci, Cr;
+  Complex[] iter_history;
+  iter_history.length = max_i+1;
 
   if (w == h) {
-    x0 = (cast(double)(px)*4.0/cast(double)(w)) - 2.5;
-    y0 = (cast(double)(py)*4.0/cast(double)(h)) - 2.0;
+    Ci = (cast(double)(pZi)*4.0/cast(double)(w)) - 2.5;
+    Cr = (cast(double)(pZr)*4.0/cast(double)(h)) - 2.0;
   } else if (w > h) {
     auto diff = cast(double)(w-h)/h;
-    x0 = (cast(double)(px)*(4.0+diff*2)/cast(double)(w)) - 2.5 - diff;
-    y0 = (cast(double)(py)*(4.0-diff)/cast(double)(h)) - 2.0 + diff/2;
+    Ci = (cast(double)(pZi)*(4.0+diff*2)/cast(double)(w)) - 2.5 - diff;
+    Cr = (cast(double)(pZr)*(4.0-diff)/cast(double)(h)) - 2.0 + diff/2;
   } else {
     auto diff = cast(double)(h-w)/w;
-    x0 = (cast(double)(px)*(4.0-diff)/cast(double)(w)) - 2.5 + diff/2;
-    y0 = (cast(double)(py)*(4.0+diff*2)/cast(double)(h)) - 2.0 - diff;
+    Ci = (cast(double)(pZi)*(4.0-diff)/cast(double)(w)) - 2.5 + diff/2;
+    Cr = (cast(double)(pZr)*(4.0+diff*2)/cast(double)(h)) - 2.0 - diff;
   }
 
-	double x = 0;
-	double y = 0;
-	int iter = 0;
-	const int max_i = 392;
-	double x_temp = 0;
+	double Zi = 0;
+	double Zr = 0;
+	int iter;
+	double Zi_temp = 0;
 
 	// Here N = 2^8 is chosen as a reasonable bailout radius.
   //  <= (1 << 16)
-	while (x*x + y*y <= (1 << 16) && iter < max_i) {
-		x_temp = x*x - y*y + x0;
-		y = 2*x*y + y0;
-		x = x_temp;
-		iter++;
+	for (iter = 0; Zi*Zi + Zr*Zr <= (1 << 16) && iter < max_i; iter++) {
+		Zi_temp = Zi*Zi - Zr*Zr + Ci;
+		Zr = 2*Zi*Zr + Cr;
+		Zi = Zi_temp;
+		
+    iter_history[iter] = Complex(Zi, Zr);
 	}
+
+  // if (Cr*Cr+Ci*Ci > 4.0) {
+  if (iter < max_i) {
+    for (int i=0; i<iter; i++) {
+      // writeln(i, ' ', iter, ' ', iter_history[i]);
+      Coord point = convertPoint( iter_history[i][0], iter_history[i][1], w, h );
+      if (point[1] >= h || point[0] >= w || point[0] < 0 || point[1] < 0) {
+        continue;
+      } //else writeln(point);
+      large_array[ point[0] ][ point[1] ]++;
+    }
+  }
+  // }
+  //  else {
+  //   large_array[ Coord(pZi, pZr) ] = iter;
+  // }
 
 	double iter_d = iter;
 
-  // auto Tr = x*x;
-  // auto Ti = y*y;
+  // auto Tr = Zi*Zi;
+  // auto Ti = Zr*Zr;
 
 	if (iter < max_i) {
-		const double log_zn = log(x*x + y*y) / 2;
+		const double log_zn = log(Zi*Zi + Zr*Zr) / 2;
 		const double nu = log( log_zn / log(2) ) / log(2);
 
 		// Rearranging the potential function.
@@ -111,17 +143,17 @@ sfColor pixelcolor(int px, int py, int w, int h) {
   // blue
 
   if ( iter == max_i ) // converged?
-    return palette[$-1];
+    return Color4f(0,0,0,0);
 
   auto v = iter_d;
   auto c = hsv(360.0*v/max_i, 1.0, 10.0*v/max_i);
 
   // writeln(c);
 
-  return sfColor(
-    to!ubyte(c.b < 1.0 ? 255*c.b : 255),
-    to!ubyte(c.g < 1.0 ? 255*c.g : 255),
-    to!ubyte(c.r < 1.0 ? 255*c.r : 255)
+  return Color4f(
+    c.b,
+    c.g,
+    c.r
   );
 
   // int color1 = cast(int)( floor(iter_d / palette.length) );
@@ -134,10 +166,61 @@ sfColor pixelcolor(int px, int py, int w, int h) {
 
 
   // return sfColor(
-  //   to!ubyte(linear_interp(palette[color2].r, palette[color1].r, diff)),
-  //   to!ubyte(linear_interp(palette[color2].g, palette[color1].g, diff)),
-  //   to!ubyte(linear_interp(palette[color2].b, palette[color1].b, diff))
+  //   to!ubZrte(linear_interp(palette[color2].r, palette[color1].r, diff)),
+  //   to!ubZrte(linear_interp(palette[color2].g, palette[color1].g, diff)),
+  //   to!ubZrte(linear_interp(palette[color2].b, palette[color1].b, diff))
   // );
+}
+
+Coord convertPoint(double Ci, double Cr, int w, int h) {
+  int pZi, pZr;
+  if (w == h) {
+    // Ci = (cast(double)(pZi)*4.0/cast(double)(w)) - 2.5;
+    // Cr = (cast(double)(pZr)*4.0/cast(double)(h)) - 2.0;
+    pZi = to!int(floor((Ci + 2.5)*to!double(w)/(4.0)));
+    pZr = to!int(floor((Cr + 2.0)*to!double(h)/(4.0)));
+  } else if (w > h) {
+    auto diff = cast(double)(w-h)/h;
+    // Ci = (cast(double)(pZi)*(4.0+diff*2)/cast(double)(w)) - 2.5 - diff;
+    // Cr = (cast(double)(pZr)*(4.0-diff)/cast(double)(h)) - 2.0 + diff/2;
+    pZi = to!int(floor( (Ci + 2.5 + diff)*to!double(w) / (4.0+diff*2)) );
+    pZr = to!int(floor( (Cr + 2.0 - diff/2)*to!double(h) / (4.0-diff)) );
+  } else {
+    auto diff = cast(double)(h-w)/w;
+    // Ci = (cast(double)(pZi)*(4.0-diff)/cast(double)(w)) - 2.5 + diff/2;
+    // Cr = (cast(double)(pZr)*(4.0+diff*2)/cast(double)(h)) - 2.0 - diff;
+    pZi = to!int(floor((Ci + 2.5 - diff/2)*to!double(w)/(4.0-diff)));
+    pZr = to!int(floor((Cr + 2.0 + diff)*to!double(h)/(4.0+diff*2)));
+  }
+
+  return Coord(pZi, pZr);
+}
+
+void updateMaxBI() {
+  foreach (key, v; large_array) {
+    writeln(key);
+    foreach (k, value; v) {
+      if (max_bi < value) max_bi = value;
+    }
+    //if (max_bi == max_i) break;
+  }
+  writeln(max_bi);
+}
+
+Color4f getBuddhabrotted(int pZi, int pZr) {
+  int v = large_array[pZi][pZr];
+  // if (v > max_bi) v = max_bi;
+
+  double c =  sqrt( cast(float)v / cast(float)max_bi );
+  if (c > 1) c = 1;
+
+  // writeln(v, ' ', c);
+
+  return Color4f(
+    c,
+    c,
+    c
+  );
 }
 
 double linear_interp(double v0, double v1, double t) {

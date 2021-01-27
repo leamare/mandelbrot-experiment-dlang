@@ -17,33 +17,36 @@ import pixel;
 alias Coord = Tuple!(int, int);
 
 int main(string[] args) {
-	const int w = 5120;
-	const int h = 2880;
+	const int w = 16*100;
+	const int h = 9*100;
+	const int iter = 50000;
+	const int max_bi = 1000;
+
+	initArr(w, h);
+	setIter(iter);
 
 	SuperImage img = image(w, h);
-	// writeln(img.pixelFormat());
-	sfColor[Coord] points;
 
 	for(int i = 0; i < w; i++) {
+		writeln(i);
 		for(int j = 0; j < h; j++) {
-			if (!(Coord(i, j) in points)) {
-				points[ Coord(i, j) ] = pixelcolor(i, j, w, h);
-			}
-			// img.setPixel(
-			// 	Color4(points[ Coord(i, j) ].r, points[ Coord(i, j) ].g, points[ Coord(i, j) ].b, 255),
-			// 	i,
-			// 	j
-			// );
-			img[i, j] = Color4f(
-				cast(float)(points[ Coord(i, j) ].r) / 255,
-				cast(float)(points[ Coord(i, j) ].g) / 255,
-				cast(float)(points[ Coord(i, j) ].b) / 255,
-				1.0f
-			);
+			img[i, j] = pixelcolor(i, j, w, h);
 		}
 	}
 
-	saveBMP(img, "out.bmp");
+	writeln("Main set");
+	savePNG(img, "out_mandel_"~to!string(w)~"x"~to!string(h)~"_"~to!string(iter)~".png");
+
+	updateMaxBI();
+	for(int i = 0; i < w; i++) {
+		// writeln(i);
+		for(int j = 0; j < h; j++) {
+			img[i, j] = getBuddhabrotted(i, j);
+		}
+	}
+
+	writeln("Buddha");
+	savePNG(img, "out_buddha_"~to!string(w)~"x"~to!string(h)~"_"~to!string(iter)~".png");
 
 	return 0;
 }

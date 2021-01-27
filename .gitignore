@@ -13,4 +13,7 @@ mandelbrot-experiment-test-*
 *.o
 *.obj
 *.lst
-out.bmp
+out*bmp
+out*png
+nebula*png
+outputs/
