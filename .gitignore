@@ -15,5 +15,5 @@ mandelbrot-experiment-test-*
 *.lst
 out*bmp
 out*png
-nebula*png
+nebula*
 outputs/
