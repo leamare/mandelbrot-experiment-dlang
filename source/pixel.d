@@ -21,22 +21,13 @@ const auto logHalfBase = log(0.5)*logBase;
 alias Complex = Tuple!(double, double);
 alias Coord = Tuple!(int, int);
 
-struct sfColor {
-  ubyte r;
-  ubyte g;
-  ubyte b;
-  ubyte a;
-  this(ubyte cr, ubyte cg, ubyte cb, ubyte ca = to!ubyte(255)) {
-    r = cr;
-    g = cg;
-    b = cb;
-    a = ca;
-  }
-}
-
 int[][] large_array;
 int max_i = 20;
-int max_bi = 20;
+int max_bi = 1;
+int min_bi = 20;
+
+double avg_bi = 1;
+double exp_bi = 1;
 
 void initArr(int w, int h) {
   large_array.length = w;
@@ -49,7 +40,7 @@ void initArr(int w, int h) {
 
 void setIter(int i) {
   max_i = i;
-  max_bi = i;
+  min_bi = i;
 }
 
 Color4f pixelcolor(int pZi, int pZr, int w, int h) {
@@ -197,21 +188,35 @@ Coord convertPoint(double Ci, double Cr, int w, int h) {
 }
 
 void updateMaxBI() {
-  foreach (key, v; large_array) {
-    writeln(key);
-    foreach (k, value; v) {
+  foreach (k, v; large_array) {
+    foreach (key, value; v) {
       if (max_bi < value) max_bi = value;
     }
     //if (max_bi == max_i) break;
   }
-  writeln(max_bi);
+  writeln("Max buddha: ", max_bi);
+
+  double local_sums = 0;
+  foreach (k, v; large_array) {
+    long sum = 0;
+    foreach (key, value; v) {
+      sum += value;
+    }
+    local_sums += sum / v.length;
+  }
+  // avg_bi = local_sums / large_array.length;
+  // writeln("Average BI: ", avg_bi);
+  
+  exp_bi = 1/log(max_i);
+  writeln("Exponent BI: ", exp_bi);
 }
 
 Color4f getBuddhabrotted(int pZi, int pZr) {
-  int v = large_array[pZi][pZr];
+  const int v = large_array[pZi][pZr];
   // if (v > max_bi) v = max_bi;
 
-  double c =  sqrt( cast(float)v / cast(float)max_bi );
+  double c =  pow( cast(double)(v) / cast(double)(max_bi), 0.25 );
+  // double c =  cast(float)v / cast(float)max_bi;
   if (c > 1) c = 1;
 
   // writeln(v, ' ', c);

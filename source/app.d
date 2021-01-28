@@ -17,10 +17,14 @@ import pixel;
 alias Coord = Tuple!(int, int);
 
 int main(string[] args) {
-	const int w = 16*100;
-	const int h = 9*100;
-	const int iter = 50000;
-	const int max_bi = 1000;
+	const int amp = 2000;
+	const int w = 4*4*amp;
+	const int h = 4*4*amp;
+	const int iter = to!int(args[1]);
+
+	const int wfactor = to!int( floor(to!double(w) / 100.0) );
+
+	writeln("Iterations: ", iter);
 
 	initArr(w, h);
 	setIter(iter);
@@ -28,7 +32,7 @@ int main(string[] args) {
 	SuperImage img = image(w, h);
 
 	for(int i = 0; i < w; i++) {
-		writeln(i);
+		if (i % wfactor == 0) writeln (i / wfactor, '%');
 		for(int j = 0; j < h; j++) {
 			img[i, j] = pixelcolor(i, j, w, h);
 		}
@@ -40,6 +44,7 @@ int main(string[] args) {
 	updateMaxBI();
 	for(int i = 0; i < w; i++) {
 		// writeln(i);
+		if (i % wfactor == 0) writeln (i / wfactor, '%');
 		for(int j = 0; j < h; j++) {
 			img[i, j] = getBuddhabrotted(i, j);
 		}
