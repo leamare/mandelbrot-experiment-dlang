@@ -168,20 +168,20 @@ Coord convertPoint(double Ci, double Cr, int w, int h) {
   if (w == h) {
     // Ci = (cast(double)(pZi)*4.0/cast(double)(w)) - 2.5;
     // Cr = (cast(double)(pZr)*4.0/cast(double)(h)) - 2.0;
-    pZi = to!int(floor((Ci + 2.5)*to!double(w)/(4.0)));
-    pZr = to!int(floor((Cr + 2.0)*to!double(h)/(4.0)));
+    pZi = to!int(round((Ci + 2.5)*to!double(w)/(4.0)));
+    pZr = to!int(round((Cr + 2.0)*to!double(h)/(4.0)));
   } else if (w > h) {
     auto diff = cast(double)(w-h)/h;
     // Ci = (cast(double)(pZi)*(4.0+diff*2)/cast(double)(w)) - 2.5 - diff;
     // Cr = (cast(double)(pZr)*(4.0-diff)/cast(double)(h)) - 2.0 + diff/2;
-    pZi = to!int(floor( (Ci + 2.5 + diff)*to!double(w) / (4.0+diff*2)) );
-    pZr = to!int(floor( (Cr + 2.0 - diff/2)*to!double(h) / (4.0-diff)) );
+    pZi = to!int(round( (Ci + 2.5 + diff)*to!double(w) / (4.0+diff*2)) );
+    pZr = to!int(round( (Cr + 2.0 - diff/2)*to!double(h) / (4.0-diff)) );
   } else {
     auto diff = cast(double)(h-w)/w;
     // Ci = (cast(double)(pZi)*(4.0-diff)/cast(double)(w)) - 2.5 + diff/2;
     // Cr = (cast(double)(pZr)*(4.0+diff*2)/cast(double)(h)) - 2.0 - diff;
-    pZi = to!int(floor((Ci + 2.5 - diff/2)*to!double(w)/(4.0-diff)));
-    pZr = to!int(floor((Cr + 2.0 + diff)*to!double(h)/(4.0+diff*2)));
+    pZi = to!int(round((Ci + 2.5 - diff/2)*to!double(w)/(4.0-diff)));
+    pZr = to!int(round((Cr + 2.0 + diff)*to!double(h)/(4.0+diff*2)));
   }
 
   return Coord(pZi, pZr);
@@ -214,6 +214,21 @@ void updateMaxBI() {
 Color4f getBuddhabrotted(int pZi, int pZr) {
   const int v = large_array[pZi][pZr];
   // if (v > max_bi) v = max_bi;
+
+  // if (v == 0) {
+  //   double an = 0;
+  //   int c = 0;
+  //   for (int i = pZi-1; i <= pZi; i++) {
+  //     for (int j = pZr-1; j <= pZr; j++) {
+  //       if (i == pZi && j == pZr) continue;
+  //       if (i < 0 || j < 0 || i >= large_array.length || j >= large_array[i].length) continue;
+  //       an += large_array[i][j];
+  //       c++;
+  //     }
+  //   }
+  //   an /= c;
+  //   v = to!int(round(an));
+  // }
 
   double c =  pow( cast(double)(v) / cast(double)(max_bi), 0.25 );
   // double c =  cast(float)v / cast(float)max_bi;
