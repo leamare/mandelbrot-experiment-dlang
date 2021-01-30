@@ -29,6 +29,9 @@ int min_bi = 20;
 double avg_bi = 1;
 double exp_bi = 1;
 
+Complex origin = Complex(0.5, 0.0);
+double radius = 2.0;
+
 void initArr(int w, int h) {
   large_array.length = w;
   for(int i=0; i < w; i++) {
@@ -43,23 +46,18 @@ void setIter(int i) {
   min_bi = i;
 }
 
+void setOrigin(double centerX, double centerY, double newRadius) {
+  origin = Complex(-centerX, centerY);
+  radius = newRadius;
+}
 Color4f pixelcolor(int pZi, int pZr, int w, int h) {
-  double Ci, Cr;
   Complex[] iter_history;
+  if (buddha)
   iter_history.length = max_i+1;
 
-  if (w == h) {
-    Ci = (cast(double)(pZi)*4.0/cast(double)(w)) - 2.5;
-    Cr = (cast(double)(pZr)*4.0/cast(double)(h)) - 2.0;
-  } else if (w > h) {
-    auto diff = cast(double)(w-h)/h;
-    Ci = (cast(double)(pZi)*(4.0+diff*2)/cast(double)(w)) - 2.5 - diff;
-    Cr = (cast(double)(pZr)*(4.0-diff)/cast(double)(h)) - 2.0 + diff/2;
-  } else {
-    auto diff = cast(double)(h-w)/w;
-    Ci = (cast(double)(pZi)*(4.0-diff)/cast(double)(w)) - 2.5 + diff/2;
-    Cr = (cast(double)(pZr)*(4.0+diff*2)/cast(double)(h)) - 2.0 - diff;
-  }
+  const Complex convertedPoint = convertPixelToPoint(pZi, pZr, w, h);
+  const double Ci = convertedPoint[0];
+  const double Cr = convertedPoint[1];
 
 	double Zi = 0;
 	double Zr = 0;
@@ -163,28 +161,41 @@ Color4f pixelcolor(int pZi, int pZr, int w, int h) {
   // );
 }
 
-Coord convertPoint(double Ci, double Cr, int w, int h) {
+Coord convertPointToPixel(double Ci, double Cr, int w, int h) {
   int pZi, pZr;
   if (w == h) {
-    // Ci = (cast(double)(pZi)*4.0/cast(double)(w)) - 2.5;
-    // Cr = (cast(double)(pZr)*4.0/cast(double)(h)) - 2.0;
-    pZi = to!int(round((Ci + 2.5)*to!double(w)/(4.0)));
-    pZr = to!int(round((Cr + 2.0)*to!double(h)/(4.0)));
+    pZi = cast(int)( round((Ci + radius + origin[0])*to!double(w)/(radius*2)) );
+    pZr = cast(int)( round((Cr + radius + origin[1])*to!double(h)/(radius*2)) );
   } else if (w > h) {
     auto diff = cast(double)(w-h)/h;
-    // Ci = (cast(double)(pZi)*(4.0+diff*2)/cast(double)(w)) - 2.5 - diff;
-    // Cr = (cast(double)(pZr)*(4.0-diff)/cast(double)(h)) - 2.0 + diff/2;
-    pZi = to!int(round( (Ci + 2.5 + diff)*to!double(w) / (4.0+diff*2)) );
-    pZr = to!int(round( (Cr + 2.0 - diff/2)*to!double(h) / (4.0-diff)) );
+    pZi = cast(int)(round( (Ci + radius + origin[0] + diff)*to!double(w) / (radius*2 + diff*2)) );
+    pZr = cast(int)(round( (Cr + radius + origin[1] - diff/2)*to!double(h) / (radius*2 - diff)) );
   } else {
     auto diff = cast(double)(h-w)/w;
-    // Ci = (cast(double)(pZi)*(4.0-diff)/cast(double)(w)) - 2.5 + diff/2;
-    // Cr = (cast(double)(pZr)*(4.0+diff*2)/cast(double)(h)) - 2.0 - diff;
-    pZi = to!int(round((Ci + 2.5 - diff/2)*to!double(w)/(4.0-diff)));
-    pZr = to!int(round((Cr + 2.0 + diff)*to!double(h)/(4.0+diff*2)));
+    pZi = cast(int)(round((Ci + radius + origin[0] - diff/2)*to!double(w)/(radius*2 - diff)));
+    pZr = cast(int)(round((Cr + radius + origin[1] + diff)*to!double(h)/(radius*2 + diff*2)));
   }
 
   return Coord(pZi, pZr);
+}
+
+Complex convertPixelToPoint(int pZi, int pZr, int w, int h) {
+  double Ci, Cr;
+
+  if (w == h) {
+    Ci = (cast(double)(pZi)*radius*2/cast(double)(w)) - radius - origin[0];
+    Cr = (cast(double)(pZr)*radius*2/cast(double)(h)) - radius - origin[1];
+  } else if (w > h) {
+    auto diff = cast(double)(w-h)/h;
+    Ci = (cast(double)(pZi)*(radius*2 + diff*2)/cast(double)(w)) - radius - origin[0] - diff;
+    Cr = (cast(double)(pZr)*(radius*2 - diff)/cast(double)(h)) - radius - origin[1] + diff/2;
+  } else {
+    auto diff = cast(double)(h-w)/w;
+    Ci = (cast(double)(pZi)*(radius*2 - diff)/cast(double)(w)) - radius - origin[1] + diff/2;
+    Cr = (cast(double)(pZr)*(radius*2 + diff*2)/cast(double)(h)) - radius - origin[0] - diff;
+  }
+
+  return Complex(Ci, Cr);
 }
 
 void updateMaxBI() {
