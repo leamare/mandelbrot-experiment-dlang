@@ -25,7 +25,10 @@ int main(string[] args) {
 	double originX = -0.5;
 	double originY = 0.0;
 	double radius = 2.0;
+
+	int paletteSize = 0;
 	bool buddha = false;
+
 	auto helpInformation = getopt(
     args,
     "iterations|i", "Number of iterations to perform, "~to!string(iter)~" by default", &iter,
@@ -57,6 +60,11 @@ int main(string[] args) {
 	setOrigin(originX, originY, radius);
 
 	if (buddha) enableBuddha();
+	if (paletteSize) setPaletteSize(paletteSize);
+	// setOrigin(0.0, 0.0, 1.0);
+	// setOrigin(-1.15, 0.1, 0.125);
+	// setOrigin(-1.25275, -0.343, 0.0025);
+
 	SuperImage img = image(w, h);
 
 	for(int i = 0; i < w; i++) {
@@ -77,16 +85,16 @@ int main(string[] args) {
 	);
 
 	if (buddha) {
-	updateMaxBI();
-	for(int i = 0; i < w; i++) {
-		// writeln(i);
-		if (i % wfactor == 0) writeln (i / wfactor, '%');
-		for(int j = 0; j < h; j++) {
-			img[i, j] = getBuddhabrotted(i, j);
+		updateMaxBI();
+		for(int i = 0; i < w; i++) {
+			// writeln(i);
+			if (i % wfactor == 0) writeln (i / wfactor, '%');
+			for(int j = 0; j < h; j++) {
+				img[i, j] = getBuddhabrotted(i, j);
+			}
 		}
-	}
-
-	writeln("Buddha");
+		
+		writeln("Buddha");
 		savePNG(img, "out_buddha_"~
 				"_X"~to!string(originX)~
 			"_Y"~to!string(originY)~

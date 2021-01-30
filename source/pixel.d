@@ -32,6 +32,9 @@ double exp_bi = 1;
 Complex origin = Complex(0.5, 0.0);
 double radius = 2.0;
 
+bool buddha = false;
+int paletteSize = 20;
+
 void initArr(int w, int h) {
   large_array.length = w;
   for(int i=0; i < w; i++) {
@@ -44,16 +47,29 @@ void initArr(int w, int h) {
 void setIter(int i) {
   max_i = i;
   min_bi = i;
+  paletteSize = i;
 }
 
 void setOrigin(double centerX, double centerY, double newRadius) {
   origin = Complex(-centerX, centerY);
   radius = newRadius;
 }
+
+void enableBuddha(bool state = true) {
+  buddha = state;
+}
+
+void setPaletteSize(int psz = 0) {
+  if (psz)
+    paletteSize = psz;
+  else 
+    paletteSize = max_i;
+}
+
 Color4f pixelcolor(int pZi, int pZr, int w, int h) {
   Complex[] iter_history;
   if (buddha)
-  iter_history.length = max_i+1;
+    iter_history.length = max_i+1;
 
   const Complex convertedPoint = convertPixelToPoint(pZi, pZr, w, h);
   const double Ci = convertedPoint[0];
@@ -71,24 +87,22 @@ Color4f pixelcolor(int pZi, int pZr, int w, int h) {
 		Zr = 2*Zi*Zr + Cr;
 		Zi = Zi_temp;
 		
-    iter_history[iter] = Complex(Zi, Zr);
+    if (buddha)
+      iter_history[iter] = Complex(Zi, Zr);
 	}
 
-  // if (Cr*Cr+Ci*Ci > 4.0) {
-  if (iter < max_i) {
-    for (int i=0; i<iter; i++) {
-      // writeln(i, ' ', iter, ' ', iter_history[i]);
-      Coord point = convertPoint( iter_history[i][0], iter_history[i][1], w, h );
-      if (point[1] >= h || point[0] >= w || point[0] < 0 || point[1] < 0) {
-        continue;
-      } //else writeln(point);
-      large_array[ point[0] ][ point[1] ]++;
+  if (buddha) {
+    if (iter < max_i) {
+      for (int i=0; i<iter; i++) {
+        // writeln(i, ' ', iter, ' ', iter_history[i]);
+        Coord point = convertPointToPixel( iter_history[i][0], iter_history[i][1], w, h );
+        if (point[1] >= h || point[0] >= w || point[0] < 0 || point[1] < 0) {
+          continue;
+        } //else writeln(point);
+        large_array[ point[0] ][ point[1] ]++;
+      }
     }
   }
-  // }
-  //  else {
-  //   large_array[ Coord(pZi, pZr) ] = iter;
-  // }
 
 	double iter_d = iter;
 
@@ -135,7 +149,7 @@ Color4f pixelcolor(int pZi, int pZr, int w, int h) {
     return Color4f(0,0,0,0);
 
   auto v = iter_d;
-  auto c = hsv(360.0*v/max_i, 1.0, 10.0*v/max_i);
+  auto c = hsv(360.0*(v/paletteSize % 1), 1.0, 10.0*(v/paletteSize % 1));
 
   // writeln(c);
 
