@@ -9,6 +9,9 @@ import std.json;
 import std.math;
 import std.typecons;
 
+import std.range;
+import std.parallelism;
+
 import dlib.image;
 // import daffodil.bmp;
 
@@ -54,6 +57,11 @@ int main(string[] args) {
 	const int wfactor = to!int( floor(to!double(w) / 100.0) );
 
 	writeln("Iterations: ", iter);
+	writeln("Image size: ", w, " x ", h);
+	writeln("Origin: ", originX, (originY < 0 ? " - " : " + "), originY, "i");
+	writeln("Viewpoint radius: ", radius);
+	writeln("Palette size: ", paletteSize ? paletteSize : iter);
+	writeln("Buddha: ", to!string(buddha));
 
 	initArr(w, h);
 	setIter(iter);
@@ -67,14 +75,16 @@ int main(string[] args) {
 
 	SuperImage img = image(w, h);
 
-	for(int i = 0; i < w; i++) {
-		if (i % wfactor == 0) writeln (i / wfactor, '%');
+	auto wRange = iota(0, w);
+	//for(int i = 0; i < w; i++) {
+	foreach (i; parallel(wRange)) {
+		if (i % wfactor == 0) write ('.');
 		for(int j = 0; j < h; j++) {
 			img[i, j] = pixelcolor(i, j, w, h);
 		}
 	}
 
-	writeln("Main set");
+	writeln("\nMain set");
 	savePNG(img, "out_mandel"~
 		"_X"~to!string(originX)~
 		"_Y"~to!string(originY)~
@@ -88,13 +98,13 @@ int main(string[] args) {
 		updateMaxBI();
 		for(int i = 0; i < w; i++) {
 			// writeln(i);
-			if (i % wfactor == 0) writeln (i / wfactor, '%');
+			if (i % wfactor == 0) write ('.');
 			for(int j = 0; j < h; j++) {
 				img[i, j] = getBuddhabrotted(i, j);
 			}
 		}
 		
-		writeln("Buddha");
+		writeln("\nBuddha");
 		savePNG(img, "out_buddha_"~
 				"_X"~to!string(originX)~
 			"_Y"~to!string(originY)~

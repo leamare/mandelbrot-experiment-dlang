@@ -6,6 +6,8 @@ import std.algorithm;
 import std.conv;
 import std.typecons;
 
+import core.atomic;
+
 import dlib.image.color;
 import dlib.image.hsv;
 
@@ -21,19 +23,19 @@ const auto logHalfBase = log(0.5)*logBase;
 alias Complex = Tuple!(double, double);
 alias Coord = Tuple!(int, int);
 
-int[][] large_array;
-int max_i = 20;
-int max_bi = 1;
-int min_bi = 20;
+shared int[][] large_array;
+shared int max_i = 20;
+shared int max_bi = 1;
+shared int min_bi = 20;
 
-double avg_bi = 1;
-double exp_bi = 1;
+shared double avg_bi = 1;
+shared double exp_bi = 1;
 
-Complex origin = Complex(0.5, 0.0);
-double radius = 2.0;
+shared Complex origin = Complex(0.5, 0.0);
+shared double radius = 2.0;
 
-bool buddha = false;
-int paletteSize = 20;
+shared bool buddha = false;
+shared int paletteSize = 20;
 
 void initArr(int w, int h) {
   large_array.length = w;
@@ -51,7 +53,9 @@ void setIter(int i) {
 }
 
 void setOrigin(double centerX, double centerY, double newRadius) {
-  origin = Complex(-centerX, centerY);
+  origin[0] = -centerX;
+  origin[1] = centerY;
+  // origin = Complex(-centerX, centerY);
   radius = newRadius;
 }
 
@@ -99,7 +103,8 @@ Color4f pixelcolor(int pZi, int pZr, int w, int h) {
         if (point[1] >= h || point[0] >= w || point[0] < 0 || point[1] < 0) {
           continue;
         } //else writeln(point);
-        large_array[ point[0] ][ point[1] ]++;
+        // large_array[ point[0] ][ point[1] ]++;
+        atomicOp!"+="(large_array[ point[0] ][ point[1] ], 1);
       }
     }
   }
