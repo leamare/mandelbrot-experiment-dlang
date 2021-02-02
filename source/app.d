@@ -58,10 +58,21 @@ int main(string[] args) {
 
 	writeln("Iterations: ", iter);
 	writeln("Image size: ", w, " x ", h);
-	writeln("Origin: ", originX, (originY < 0 ? " - " : " + "), originY, "i");
-	writeln("Viewpoint radius: ", radius);
+	writeln("Origin: ", format!"%.17g"(originX), (originY < 0 ? " - " : " + "), format!"%.17g"(originY), "i");
+	writeln("Viewpoint radius: ", format!"%.17g"(radius));
 	writeln("Palette size: ", paletteSize ? paletteSize : iter);
 	writeln("Buddha: ", to!string(buddha));
+
+	auto filenamePostfix = "_X=" ~ format!"%.17g"(originX) ~
+		"_Y=" ~ format!"%.17g"(originY) ~
+		"_R=" ~ format!"%.17g"(radius) ~
+		"_W=" ~ to!string(w) ~
+		"_H=" ~ to!string(h) ~
+		"_I=" ~ to!string(iter) ~ 
+		"_P=" ~ to!string(paletteSize) ~ 
+	".png";
+
+	writeln("Filename postfix: ", filenamePostfix);
 
 	initArr(w, h);
 	setIter(iter);
@@ -85,14 +96,7 @@ int main(string[] args) {
 	}
 
 	writeln("\nMain set");
-	savePNG(img, "out_mandel"~
-		"_X"~to!string(originX)~
-		"_Y"~to!string(originY)~
-		"_R"~to!string(radius)~
-		"_W"~to!string(w)~
-		"_H"~to!string(h)~
-		"_I"~to!string(iter)~".png"
-	);
+	savePNG(img, "out_mandel"~filenamePostfix);
 
 	if (buddha) {
 		updateMaxBI();
@@ -105,14 +109,7 @@ int main(string[] args) {
 		}
 		
 		writeln("\nBuddha");
-		savePNG(img, "out_buddha_"~
-				"_X"~to!string(originX)~
-			"_Y"~to!string(originY)~
-			"_R"~to!string(radius)~
-			"_W"~to!string(w)~
-			"_H"~to!string(h)~
-			"_I"~to!string(iter)~".png"
-		);
+		savePNG(img, "out_buddha_"~filenamePostfix);
 	}
 
 	return 0;

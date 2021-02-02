@@ -111,9 +111,6 @@ Color4f pixelcolor(int pZi, int pZr, int w, int h) {
 
 	double iter_d = iter;
 
-  // auto Tr = Zi*Zi;
-  // auto Ti = Zr*Zr;
-
 	if (iter < max_i) {
 		const double log_zn = log(Zi*Zi + Zr*Zr) / 2;
 		const double nu = log( log_zn / log(2) ) / log(2);
@@ -128,56 +125,23 @@ Color4f pixelcolor(int pZi, int pZr, int w, int h) {
 
   //grayscale
 
-  // if ( iter == max_i ) { // converged?
-  //   auto c = 255 - floor(255.0*sqrt(Tr+Ti)) % 255;
-  //   if ( c < 0 ) c = 0;
-  //   if ( c > 255 ) c = 255;
-  //   return sfColor(
-  //     to!ubyte(c),
-  //     to!ubyte(c),
-  //     to!ubyte(c)
-  //   );
-  // }
+  // auto Tr = Zi*Zi;
+  // auto Ti = Zr*Zr;
 
-  // auto v = iter_d;
-  // v = floor(512.0*v/max_i);
-  // if ( v > 255 ) v = 255;
-  // return sfColor(
-  //   to!ubyte(v),
-  //   to!ubyte(v),
-  //   to!ubyte(v)
-  // );
+  // if ( iter == max_i ) return Color4f(0,0,0);
 
-  // blue
+  // auto v = iter_d/paletteSize % 1;
+  // // if (v > 1) v = 1.;
+  // return Color4f(v, v, v);
 
-  if ( iter == max_i ) // converged?
-    return Color4f(0,0,0,0);
+  // HSV
 
-  auto v = iter_d;
-  auto c = hsv(360.0*(v/paletteSize % 1), 1.0, 10.0*(v/paletteSize % 1));
+  if ( iter == max_i ) return Color4f(0,0,0);
 
-  // writeln(c);
+  auto v = iter_d/paletteSize % 1;
+  auto c = hsv(360.0*v, 1.0, 10.0*v);
 
-  return Color4f(
-    c.b,
-    c.g,
-    c.r
-  );
-
-  // int color1 = cast(int)( floor(iter_d / palette.length) );
-  // if (color1+1 >= palette.length) {
-  //   return palette[$-1];
-  // }
-
-  // int color2 = cast(int)( (color1 + 1) );
-  // float diff = (iter_d / palette.length) % 1;
-
-
-  // return sfColor(
-  //   to!ubZrte(linear_interp(palette[color2].r, palette[color1].r, diff)),
-  //   to!ubZrte(linear_interp(palette[color2].g, palette[color1].g, diff)),
-  //   to!ubZrte(linear_interp(palette[color2].b, palette[color1].b, diff))
-  // );
+  return Color4f(c.b, c.g, c.r);
 }
 
 Coord convertPointToPixel(double Ci, double Cr, int w, int h) {
