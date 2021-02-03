@@ -11,11 +11,7 @@ import core.atomic;
 import dlib.image.color;
 import dlib.image.hsv;
 
-// palette:
-// - black
-// - Zrellow
-// - red-ish
-// - blue
+
 
 const auto logBase = 1.0 / log(2.0);
 const auto logHalfBase = log(0.5)*logBase;
@@ -28,17 +24,36 @@ shared int max_i = 20;
 shared int max_bi = 1;
 shared int min_bi = 20;
 
-shared double avg_bi = 1;
-shared double exp_bi = 1;
-
 shared Complex origin = Complex(0.5, 0.0);
 shared double radius = 2.0;
 
 shared bool buddha = false;
 shared int paletteSize = 20;
 
+const Color4f[] palette = [
+  RGBtoColor4f(66, 30, 15),
+  RGBtoColor4f(25, 7, 26),
+  RGBtoColor4f(9, 1, 47),
+  RGBtoColor4f(4, 4, 73),
+  RGBtoColor4f(0, 7, 100),
+  RGBtoColor4f(12, 44, 138),
+  RGBtoColor4f(24, 82, 177),
+  RGBtoColor4f(57, 125, 209),
+  RGBtoColor4f(134, 181, 229),
+  RGBtoColor4f(211, 236, 248),
+  RGBtoColor4f(241, 233, 191),
+  RGBtoColor4f(248, 201, 95),
+  RGBtoColor4f(255, 170, 0),
+  RGBtoColor4f(204, 128, 0),
+  RGBtoColor4f(153, 87, 0),
+  RGBtoColor4f(106, 52, 3),
+];
+
+// preset functions
+
 void initArr(int w, int h) {
   large_array.length = w;
+
   for(int i=0; i < w; i++) {
     large_array[i].length = h;
     for (int j=0; j<h; j++)
@@ -49,7 +64,7 @@ void initArr(int w, int h) {
 void setIter(int i) {
   max_i = i;
   min_bi = i;
-  paletteSize = i;
+  paletteSize = cast(int)(i*0.3);
 }
 
 void setOrigin(double centerX, double centerY, double newRadius) {
@@ -69,6 +84,8 @@ void setPaletteSize(int psz = 0) {
   else 
     paletteSize = max_i;
 }
+
+// calculators
 
 Color4f pixelcolor(int pZi, int pZr, int w, int h) {
   Complex[] iter_history;
@@ -98,35 +115,31 @@ Color4f pixelcolor(int pZi, int pZr, int w, int h) {
   if (buddha) {
     if (iter < max_i) {
       for (int i=0; i<iter; i++) {
-        // writeln(i, ' ', iter, ' ', iter_history[i]);
         Coord point = convertPointToPixel( iter_history[i][0], iter_history[i][1], w, h );
         if (point[1] >= h || point[0] >= w || point[0] < 0 || point[1] < 0) {
           continue;
-        } //else writeln(point);
-        // large_array[ point[0] ][ point[1] ]++;
+        }
         atomicOp!"+="(large_array[ point[0] ][ point[1] ], 1);
       }
     }
   }
 
 	double iter_d = iter;
+  // auto Tr = Zi*Zi;
+  // auto Ti = Zr*Zr;
 
 	if (iter < max_i) {
-		const double log_zn = log(Zi*Zi + Zr*Zr) / 2;
-		const double nu = log( log_zn / log(2) ) / log(2);
+		const double log_zn = log(Zi*Zi + Zr*Zr) * 0.5;
+		const double nu = log( log_zn * logBase ) * logBase;
 
 		// Rearranging the potential function.
 		// Dividing log_zn by log(2) instead of log(N = 1<<8)
 		// because we want the entire palette to range from the
 		// center to radius 2, NOT our bailout radius.
-		// iter_d = 5 + iter - logHalfBase - log(log(Tr+Ti))*logBase;
     iter_d = 1 + to!double(iter) - nu;
 	}
 
   //grayscale
-
-  // auto Tr = Zi*Zi;
-  // auto Ti = Zr*Zr;
 
   // if ( iter == max_i ) return Color4f(0,0,0);
 
@@ -138,10 +151,24 @@ Color4f pixelcolor(int pZi, int pZr, int w, int h) {
 
   if ( iter == max_i ) return Color4f(0,0,0);
 
-  auto v = iter_d/paletteSize % 1;
-  auto c = hsv(360.0*v, 1.0, 10.0*v);
+  // auto v = (iter_d/paletteSize % 1);
+  // auto c = hsv(360.0*v, 1.0, 10.0*v);
+  // return Color4f(c.b, c.g, c.r);
+  
+  ubyte c1, c2;
 
-  return Color4f(c.b, c.g, c.r);
+  auto paletteBlock = to!float(paletteSize)/palette.length;
+
+  c1 = cast(ubyte)( floor(iter_d/paletteBlock) % palette.length );
+  c2 = iter + paletteBlock >= max_i ? 4 : to!ubyte( (c1 + 1) % palette.length );
+
+  const float vd = (iter_d % paletteBlock) / paletteBlock;
+  
+  return Color4f(
+    palette[c1].r + (palette[c2].r - palette[c1].r) * vd,
+    palette[c1].g + (palette[c2].g - palette[c1].g) * vd,
+    palette[c1].b + (palette[c2].b - palette[c1].b) * vd,
+  );
 }
 
 Coord convertPointToPixel(double Ci, double Cr, int w, int h) {
@@ -211,14 +238,12 @@ Color4f getBuddhabrotted(int pZi, int pZr) {
   return Color4f(c, c, c);
 }
 
+// service 
 
+Color4f RGBtoColor4f(ubyte r, ubyte g, ubyte b) {
   return Color4f(
-    c,
-    c,
-    c
+    to!float(r)/255.,
+    to!float(g)/255.,
+    to!float(b)/255.
   );
-}
-
-double linear_interp(double v0, double v1, double t) {
-  return (1 - t) * min(v0, v1) + t * max(v1, v0);
 }
