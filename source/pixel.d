@@ -146,37 +146,39 @@ Color4f pixelcolor(int pZi, int pZr, int w, int h) {
 
 Coord convertPointToPixel(double Ci, double Cr, int w, int h) {
   int pZi, pZr;
+  double di, dr;
+
   if (w == h) {
-    pZi = cast(int)( round((Ci + radius + origin[0])*to!double(w)/(radius*2)) );
-    pZr = cast(int)( round((Cr + radius + origin[1])*to!double(h)/(radius*2)) );
-  } else if (w > h) {
-    auto diff = cast(double)(w-h)/h;
-    pZi = cast(int)(round( (Ci + radius + origin[0] + diff)*to!double(w) / (radius*2 + diff*2)) );
-    pZr = cast(int)(round( (Cr + radius + origin[1] - diff/2)*to!double(h) / (radius*2 - diff)) );
+    di = 0;
+    dr = 0;
   } else {
-    auto diff = cast(double)(h-w)/w;
-    pZi = cast(int)(round((Ci + radius + origin[0] - diff/2)*to!double(w)/(radius*2 - diff)));
-    pZr = cast(int)(round((Cr + radius + origin[1] + diff)*to!double(h)/(radius*2 + diff*2)));
+    double diff = cast(double)( max(w, h)-min(w, h) )/min(w, h);
+    di = w > h ? diff : -diff/2;
+    dr = w > h ? -diff/2 : diff;
   }
+
+  pZi = cast(int)( round( (Ci + radius + origin[0] + di) * to!double(w)/(radius*2 + di*2) ) );
+  pZr = cast(int)( round( (Cr + radius + origin[1] + dr) * to!double(h)/(radius*2 + dr*2) ) );
+
 
   return Coord(pZi, pZr);
 }
 
 Complex convertPixelToPoint(int pZi, int pZr, int w, int h) {
   double Ci, Cr;
+  double di, dr;
 
   if (w == h) {
-    Ci = (cast(double)(pZi)*radius*2/cast(double)(w)) - radius - origin[0];
-    Cr = (cast(double)(pZr)*radius*2/cast(double)(h)) - radius - origin[1];
-  } else if (w > h) {
-    auto diff = cast(double)(w-h)/h;
-    Ci = (cast(double)(pZi)*(radius*2 + diff*2)/cast(double)(w)) - radius - origin[0] - diff;
-    Cr = (cast(double)(pZr)*(radius*2 - diff)/cast(double)(h)) - radius - origin[1] + diff/2;
+    di = 0;
+    dr = 0;
   } else {
-    auto diff = cast(double)(h-w)/w;
-    Ci = (cast(double)(pZi)*(radius*2 - diff)/cast(double)(w)) - radius - origin[1] + diff/2;
-    Cr = (cast(double)(pZr)*(radius*2 + diff*2)/cast(double)(h)) - radius - origin[0] - diff;
+    double diff = cast(double)( max(w, h)-min(w, h) )/min(w, h);
+    di = w > h ? diff : -diff/2;
+    dr = w > h ? -diff/2 : diff;
   }
+
+  Ci = (to!double(pZi)*(radius*2 + di*2)/to!double(w)) - radius - origin[0] - di;
+  Cr = (to!double(pZr)*(radius*2 + dr*2)/to!double(h)) - radius - origin[1] - dr;
 
   return Complex(Ci, Cr);
 }
@@ -186,7 +188,6 @@ void updateMaxBI() {
     foreach (key, value; v) {
       if (max_bi < value) max_bi = value;
     }
-    //if (max_bi == max_i) break;
   }
   writeln("Max buddha: ", max_bi);
 
@@ -198,37 +199,18 @@ void updateMaxBI() {
     }
     local_sums += sum / v.length;
   }
-  // avg_bi = local_sums / large_array.length;
-  // writeln("Average BI: ", avg_bi);
-  
-  exp_bi = 1/log(max_i);
-  writeln("Exponent BI: ", exp_bi);
 }
 
 Color4f getBuddhabrotted(int pZi, int pZr) {
   const int v = large_array[pZi][pZr];
-  // if (v > max_bi) v = max_bi;
-
-  // if (v == 0) {
-  //   double an = 0;
-  //   int c = 0;
-  //   for (int i = pZi-1; i <= pZi; i++) {
-  //     for (int j = pZr-1; j <= pZr; j++) {
-  //       if (i == pZi && j == pZr) continue;
-  //       if (i < 0 || j < 0 || i >= large_array.length || j >= large_array[i].length) continue;
-  //       an += large_array[i][j];
-  //       c++;
-  //     }
-  //   }
-  //   an /= c;
-  //   v = to!int(round(an));
-  // }
 
   double c =  pow( cast(double)(v) / cast(double)(max_bi), 0.25 );
-  // double c =  cast(float)v / cast(float)max_bi;
+  
   if (c > 1) c = 1;
 
-  // writeln(v, ' ', c);
+  return Color4f(c, c, c);
+}
+
 
   return Color4f(
     c,
