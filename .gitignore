@@ -1,4 +1,5 @@
 .dub
+.vscode
 docs.json
 __dummy.html
 docs/
@@ -13,6 +14,7 @@ mandelbrot-experiment-test-*
 *.o
 *.obj
 *.lst
+runs.txt
 out*bmp
 out*png
 nebula*
