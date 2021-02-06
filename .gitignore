@@ -15,7 +15,7 @@ mandelbrot-experiment-test-*
 *.obj
 *.lst
 runs.txt
-out*bmp
-out*png
+*.bmp
+*.png
 nebula*
-outputs/
+outputs*/

@@ -18,6 +18,8 @@ const auto logHalfBase = log(0.5)*logBase;
 
 alias Complex = Tuple!(double, double);
 alias Coord = Tuple!(int, int);
+enum FType { mandelbrot, multibrot, ship }
+enum ColorFunc { ultrafrac, hsv, gray, blue, red }
 
 shared int[][] large_array;
 shared int max_i = 20;
@@ -29,6 +31,9 @@ shared double radius = 2.0;
 
 shared bool buddha = false;
 shared int paletteSize = 20;
+
+shared FType type;
+shared ColorFunc colorfunc;
 
 const Color4f[] palette = [
   RGBtoColor4f(66, 30, 15),
@@ -76,6 +81,14 @@ void setOrigin(double centerX, double centerY, double newRadius) {
 
 void enableBuddha(bool state = true) {
   buddha = state;
+}
+
+void setColorFunc(ColorFunc value = ColorFunc.init) {
+  colorfunc = value;
+}
+
+void setType(FType value = FType.init) {
+  type = value;
 }
 
 void setPaletteSize(int psz = 0) {
@@ -139,36 +152,40 @@ Color4f pixelcolor(int pZi, int pZr, int w, int h) {
     iter_d = 1 + to!double(iter) - nu;
 	}
 
-  //grayscale
-
-  // if ( iter == max_i ) return Color4f(0,0,0);
-
-  // auto v = iter_d/paletteSize % 1;
-  // // if (v > 1) v = 1.;
-  // return Color4f(v, v, v);
-
-  // HSV
+  // coloring
 
   if ( iter == max_i ) return Color4f(0,0,0);
 
-  // auto v = (iter_d/paletteSize % 1);
-  // auto c = hsv(360.0*v, 1.0, 10.0*v);
-  // return Color4f(c.b, c.g, c.r);
-  
-  ubyte c1, c2;
+  if (colorfunc == ColorFunc.ultrafrac) {
+    ubyte c1, c2;
 
-  auto paletteBlock = to!float(paletteSize)/palette.length;
+    auto paletteBlock = to!float(paletteSize)/palette.length;
 
-  c1 = cast(ubyte)( floor(iter_d/paletteBlock) % palette.length );
-  c2 = iter + paletteBlock >= max_i ? 4 : to!ubyte( (c1 + 1) % palette.length );
+    c1 = cast(ubyte)( floor(iter_d/paletteBlock) % palette.length );
+    c2 = iter + paletteBlock >= max_i ? 4 : to!ubyte( (c1 + 1) % palette.length );
 
-  const float vd = (iter_d % paletteBlock) / paletteBlock;
-  
-  return Color4f(
-    palette[c1].r + (palette[c2].r - palette[c1].r) * vd,
-    palette[c1].g + (palette[c2].g - palette[c1].g) * vd,
-    palette[c1].b + (palette[c2].b - palette[c1].b) * vd,
-  );
+    const float vd = (iter_d % paletteBlock) / paletteBlock;
+    
+    return Color4f(
+      palette[c1].r + (palette[c2].r - palette[c1].r) * vd,
+      palette[c1].g + (palette[c2].g - palette[c1].g) * vd,
+      palette[c1].b + (palette[c2].b - palette[c1].b) * vd,
+    );
+  } else if (colorfunc == ColorFunc.hsv) {
+    auto v = (iter_d/paletteSize % 1);
+    auto c = hsv(360.0*v, 1.0, 10.0*v);
+    return Color4f(c.b, c.g, c.r);
+  } else {
+    auto v = iter_d/paletteSize % 1;
+    // if (v > 1) v = 1.;
+    if (colorfunc == ColorFunc.blue)
+      return Color4f(0, v*v, v);
+    
+    if (colorfunc == ColorFunc.red)
+      return Color4f(v, v*v, 0);
+
+    return Color4f(v, v, v);
+  }
 }
 
 Coord convertPointToPixel(double Ci, double Cr, int w, int h) {
