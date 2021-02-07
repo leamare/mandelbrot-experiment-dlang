@@ -28,6 +28,7 @@ int main(string[] args) {
 	double originX = -0.5;
 	double originY = 0.0;
 	double radius = 2.0;
+	float multibrotExp = 2.0;
 
 	int paletteSize = 0;
 	bool buddha = false;
@@ -52,6 +53,7 @@ int main(string[] args) {
 		"dir|d", "Output directory, `out` by default (created if does not exists)", &dir,
 		"type|t", "Fractal type (mandelbrot, multibrot, ship), mandelbrot by default", &type,
 		"colorfunc|c", "Coloring function (ultrafrac, hsv, gray, blue, red), ultrafrac by default", &colorfunc,
+		"exponent|e", "Multibrot exponent, 2.0 by default", &multibrotExp,
   );
 
 	if (helpInformation.helpWanted) {
@@ -75,6 +77,7 @@ int main(string[] args) {
 			"_I=" ~ to!string(iter) ~ 
 			"_P=" ~ to!string(paletteSize) ~ 
 			"_C=" ~ to!string(colorfunc) ~ 
+			( type == FType.multibrot ? "_E=" ~ to!string(multibrotExp) : "") ~
 		".png";
 	}
 
