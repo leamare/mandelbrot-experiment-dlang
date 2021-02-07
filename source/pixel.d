@@ -11,7 +11,11 @@ import core.atomic;
 import dlib.image.color;
 import dlib.image.hsv;
 
-
+// I don't really want to use it but I won't be able to calculate 
+// negative multibrots otherwise so yes, it's only used in ONE specific place
+// and in every other I'm doing in an old-fashioned way
+// I could've implement it myself, but I don't have any idea how to
+// import std.complex;
 
 const auto logBase = 1.0 / log(2.0);
 const auto logHalfBase = log(0.5)*logBase;
@@ -34,6 +38,8 @@ shared int paletteSize = 20;
 
 shared FType type;
 shared ColorFunc colorfunc;
+
+shared float multibrotExp = 2.0;
 
 const Color4f[] palette = [
   RGBtoColor4f(66, 30, 15),
@@ -91,6 +97,10 @@ void setType(FType value = FType.init) {
   type = value;
 }
 
+void setMultibrotBase(float value = 2.0) {
+  multibrotExp = value;
+}
+
 void setPaletteSize(int psz = 0) {
   if (psz)
     paletteSize = psz;
@@ -105,25 +115,95 @@ Color4f pixelcolor(int pZi, int pZr, int w, int h) {
   if (buddha)
     iter_history.length = max_i+1;
 
-  const Complex convertedPoint = convertPixelToPoint(pZi, pZr, w, h);
-  const double Ci = convertedPoint[0];
-  const double Cr = convertedPoint[1];
+  const Complex convertedPoint = convertPixelToPoint(pZr, pZi, w, h);
+  const double Cr = convertedPoint[0];
+  const double Ci = convertedPoint[1];
 
-	double Zi = 0;
 	double Zr = 0;
+	double Zi = 0;
 	int iter;
-	double Zi_temp = 0;
+	double Zr_temp = 0;
 
-	// Here N = 2^8 is chosen as a reasonable bailout radius.
-  //  <= (1 << 16)
-	for (iter = 0; Zi*Zi + Zr*Zr <= (1 << 16) && iter < max_i; iter++) {
-		Zi_temp = Zi*Zi - Zr*Zr + Ci;
-		Zr = 2*Zi*Zr + Cr;
-		Zi = Zi_temp;
-		
-    if (buddha)
-      iter_history[iter] = Complex(Zi, Zr);
-	}
+  if (type == FType.multibrot && multibrotExp != 2.0) {
+    double r;
+
+    // using std.complex it would be easier
+    // but it wouldn't be interesting enough
+    // here's the code
+    //
+    // auto Zn = complex(Zr, Zi);
+
+    // for (iter = 0; Zr*Zr + Zi*Zi <= (1 << 16) && iter < max_i; iter++) {
+    //   Zn = pow(Zn, multibrotExp);
+    //   Zr = Zn.re + Cr;
+    //   Zi = Zn.im + Ci;
+    //   Zn = complex(Zr, Zi);
+
+    //   if (buddha)
+    //     iter_history[iter] = Complex(Zr, Zi);
+    // }
+
+    if (multibrotExp > 0) {
+      for (iter = 0; Zr*Zr + Zi*Zi <= (1 << 16) && iter < max_i; iter++) {
+        r = pow(Zr*Zr + Zi*Zi, multibrotExp/2);
+        Zr_temp = r * cos(multibrotExp * atan2(Zi, Zr)) + Cr;
+        Zi = r * sin(multibrotExp * atan2(Zi, Zr)) + Ci;
+        Zr = Zr_temp;
+        
+        if (buddha)
+          iter_history[iter] = Complex(Zr, Zi);
+      }
+    } else if (multibrotExp < 0) {
+      auto m = -multibrotExp;
+      for (iter = 0; Zr*Zr + Zi*Zi <= (1 << 16) && iter < max_i; iter++) {
+        r = pow(Zr*Zr + Zi*Zi, m/2);
+        Zr_temp = r * cos(m * atan2(Zi, Zr));
+        Zi = r * sin(m * atan2(Zi, Zr));
+        Zr = Zr_temp;
+
+        // dividing (1 + 0i) / z
+        r = (Zr*Zr + Zi*Zi);
+        if (r == 0) {
+          Zr = Cr;
+          Zi = Ci;
+        } else {
+          Zr_temp = Zr / r + Cr;
+          Zi = -Zi / r + Ci;
+          Zr = Zr_temp;
+        }
+        
+        if (buddha)
+          iter_history[iter] = Complex(Zr, Zi);
+      }
+    } else {
+      for (iter = 0; Zr*Zr + Zi*Zi <= (1 << 16) && iter < max_i; iter++) {
+        Zr_temp = 1 + Cr;
+        Zi = 0 + Ci;
+        Zr = Zr_temp;
+
+        if (buddha)
+          iter_history[iter] = Complex(Zr, Zi);
+      }
+    }
+  } else if (type == FType.ship) {
+    for (iter = 0; Zr*Zr + Zi*Zi <= (1 << 16) && iter < max_i; iter++) {
+      Zr_temp = Zr*Zr - Zi*Zi + Cr;
+      Zi = abs(2*Zr*Zi) + Ci;
+      Zr = Zr_temp;
+      
+      if (buddha)
+        iter_history[iter] = Complex(Zi, Zr);
+    }
+  } else {
+    for (iter = 0; Zr*Zr + Zi*Zi <= (1 << 16) && iter < max_i; iter++) {
+      Zr_temp = Zr*Zr - Zi*Zi + Cr;
+      Zi = 2*Zr*Zi + Ci;
+      Zr = Zr_temp;
+      
+      if (buddha)
+        iter_history[iter] = Complex(Zr, Zi);
+    }
+  }
 
   if (buddha) {
     if (iter < max_i) {
@@ -138,17 +218,15 @@ Color4f pixelcolor(int pZi, int pZr, int w, int h) {
   }
 
 	double iter_d = iter;
-  // auto Tr = Zi*Zi;
-  // auto Ti = Zr*Zr;
+
+  if (type == FType.multibrot && multibrotExp <= 1) {
+    iter = max_i - iter;
+  }
 
 	if (iter < max_i) {
-		const double log_zn = log(Zi*Zi + Zr*Zr) * 0.5;
+		const double log_zn = log(Zr*Zr + Zi*Zi) * 0.5;
 		const double nu = log( log_zn * logBase ) * logBase;
 
-		// Rearranging the potential function.
-		// Dividing log_zn by log(2) instead of log(N = 1<<8)
-		// because we want the entire palette to range from the
-		// center to radius 2, NOT our bailout radius.
     iter_d = 1 + to!double(iter) - nu;
 	}
 
@@ -161,7 +239,7 @@ Color4f pixelcolor(int pZi, int pZr, int w, int h) {
 
     auto paletteBlock = to!float(paletteSize)/palette.length;
 
-    c1 = cast(ubyte)( floor(iter_d/paletteBlock) % palette.length );
+    c1 = cast(ubyte)( floor(abs(iter_d)/paletteBlock) % palette.length );
     c2 = iter + paletteBlock >= max_i ? 4 : to!ubyte( (c1 + 1) % palette.length );
 
     const float vd = (iter_d % paletteBlock) / paletteBlock;
@@ -188,7 +266,7 @@ Color4f pixelcolor(int pZi, int pZr, int w, int h) {
   }
 }
 
-Coord convertPointToPixel(double Ci, double Cr, int w, int h) {
+Coord convertPointToPixel(double Cr, double Ci, int w, int h) {
   int pZi, pZr;
   double di, dr;
 
@@ -201,15 +279,15 @@ Coord convertPointToPixel(double Ci, double Cr, int w, int h) {
     dr = w > h ? -diff/2 : diff;
   }
 
-  pZi = cast(int)( round( (Ci + radius + origin[0] + di) * to!double(w)/(radius*2 + di*2) ) );
-  pZr = cast(int)( round( (Cr + radius + origin[1] + dr) * to!double(h)/(radius*2 + dr*2) ) );
+  pZi = cast(int)( round( (Cr + radius + origin[0] + di) * to!double(w)/(radius*2 + di*2) ) );
+  pZr = cast(int)( round( (Ci + radius + origin[1] + dr) * to!double(h)/(radius*2 + dr*2) ) );
 
 
   return Coord(pZi, pZr);
 }
 
-Complex convertPixelToPoint(int pZi, int pZr, int w, int h) {
-  double Ci, Cr;
+Complex convertPixelToPoint(int pZr, int pZi, int w, int h) {
+  double Cr, Ci;
   double di, dr;
 
   if (w == h) {
@@ -221,10 +299,10 @@ Complex convertPixelToPoint(int pZi, int pZr, int w, int h) {
     dr = w > h ? -diff/2 : diff;
   }
 
-  Ci = (to!double(pZi)*(radius*2 + di*2)/to!double(w)) - radius - origin[0] - di;
-  Cr = (to!double(pZr)*(radius*2 + dr*2)/to!double(h)) - radius - origin[1] - dr;
+  Cr = (to!double(pZi)*(radius*2 + di*2)/to!double(w)) - radius - origin[0] - di;
+  Ci = (to!double(pZr)*(radius*2 + dr*2)/to!double(h)) - radius - origin[1] - dr;
 
-  return Complex(Ci, Cr);
+  return Complex(Cr, Ci);
 }
 
 void updateMaxBI() {
@@ -245,8 +323,8 @@ void updateMaxBI() {
   }
 }
 
-Color4f getBuddhabrotted(int pZi, int pZr) {
-  const int v = large_array[pZi][pZr];
+Color4f getBuddhabrotted(int pZr, int pZi) {
+  const int v = large_array[pZr][pZi];
 
   double c =  pow( cast(double)(v) / cast(double)(max_bi), 0.25 );
   
