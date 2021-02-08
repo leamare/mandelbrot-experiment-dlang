@@ -22,6 +22,7 @@ const auto logHalfBase = log(0.5)*logBase;
 
 alias Complex = Tuple!(double, double);
 alias Coord = Tuple!(int, int);
+alias Iters = Tuple!(int, double);
 enum FType { mandelbrot, multibrot, ship }
 enum ColorFunc { ultrafrac, hsv, gray, blue, red, base }
 
@@ -109,8 +110,7 @@ void setPaletteSize(int psz = 0) {
 }
 
 // calculators
-
-Color4f pixelcolor(int pZi, int pZr, int w, int h) {
+Iters iterate(int pZi, int pZr, int w, int h) {
   Complex[] iter_history;
   if (buddha)
     iter_history.length = max_i+1;
@@ -230,8 +230,11 @@ Color4f pixelcolor(int pZi, int pZr, int w, int h) {
     iter_d = 1 + to!double(iter) - nu;
 	}
 
-  // coloring
+  return Iters(iter, iter_d);
+}
 
+// coloring
+Color4f pixelcolor(int iter, double iter_d) {
   if ( iter == max_i ) return Color4f(0,0,0);
 
   if (colorfunc == ColorFunc.ultrafrac) {
@@ -337,7 +340,6 @@ Color4f getBuddhabrotted(int pZr, int pZi) {
 }
 
 // service 
-
 Color4f RGBtoColor4f(ubyte r, ubyte g, ubyte b) {
   return Color4f(
     to!float(r)/255.,

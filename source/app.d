@@ -112,9 +112,11 @@ int main(string[] args) {
 	auto wRange = iota(0, w);
 	//for(int i = 0; i < w; i++) {
 	foreach (i; parallel(wRange)) {
+		Iters iters;
 		if (i % wfactor == 0) write ('.');
 		for(int j = 0; j < h; j++) {
-			img[i, j] = pixelcolor(i, j, w, h);
+			iters = iterate(i, j, w, h);
+			img[i, j] = pixelcolor(iters[0], iters[1]);
 		}
 	}
 
