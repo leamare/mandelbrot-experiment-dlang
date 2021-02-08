@@ -23,7 +23,7 @@ const auto logHalfBase = log(0.5)*logBase;
 alias Complex = Tuple!(double, double);
 alias Coord = Tuple!(int, int);
 enum FType { mandelbrot, multibrot, ship }
-enum ColorFunc { ultrafrac, hsv, gray, blue, red }
+enum ColorFunc { ultrafrac, hsv, gray, blue, red, base }
 
 shared int[][] large_array;
 shared int max_i = 20;
@@ -253,6 +253,9 @@ Color4f pixelcolor(int pZi, int pZr, int w, int h) {
     auto v = (iter_d/paletteSize % 1);
     auto c = hsv(360.0*v, 1.0, 10.0*v);
     return Color4f(c.b, c.g, c.r);
+  } else if (colorfunc == ColorFunc.base) {
+    if (iter_d > 0) return Color4f(1.0, 1.0, 1.0);
+    return Color4f(0, 0, 0);
   } else {
     auto v = iter_d/paletteSize % 1;
     // if (v > 1) v = 1.;
