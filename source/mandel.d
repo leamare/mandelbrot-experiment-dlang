@@ -1,4 +1,4 @@
-module pixel;
+module mandel;
 
 import std.stdio;
 import std.math;
@@ -22,11 +22,11 @@ const auto logHalfBase = log(0.5)*logBase;
 
 alias Complex = Tuple!(double, double);
 alias Coord = Tuple!(int, int);
-alias Iters = Tuple!(int, double);
+struct Iters { int i; double d; this(int iv, double dv) { this.i = iv; this.d = dv; } };
 enum FType { mandelbrot, multibrot, ship }
 enum ColorFunc { ultrafrac, hsv, gray, blue, red, base }
 
-shared int[][] large_array;
+shared int[][] buddha_data;
 shared int max_i = 20;
 shared int max_bi = 1;
 shared int min_bi = 20;
@@ -64,12 +64,12 @@ const Color4f[] palette = [
 // preset functions
 
 void initArr(int w, int h) {
-  large_array.length = w;
+  buddha_data.length = w;
 
   for(int i=0; i < w; i++) {
-    large_array[i].length = h;
+    buddha_data[i].length = h;
     for (int j=0; j<h; j++)
-      large_array[i][j] = 0;
+      buddha_data[i][j] = 0;
   }
 }
 
@@ -212,7 +212,7 @@ Iters iterate(int pZi, int pZr, int w, int h) {
         if (point[1] >= h || point[0] >= w || point[0] < 0 || point[1] < 0) {
           continue;
         }
-        atomicOp!"+="(large_array[ point[0] ][ point[1] ], 1);
+        atomicOp!"+="(buddha_data[ point[0] ][ point[1] ], 1);
       }
     }
   }
@@ -312,7 +312,7 @@ Complex convertPixelToPoint(int pZr, int pZi, int w, int h) {
 }
 
 void updateMaxBI() {
-  foreach (k, v; large_array) {
+  foreach (k, v; buddha_data) {
     foreach (key, value; v) {
       if (max_bi < value) max_bi = value;
     }
@@ -320,7 +320,7 @@ void updateMaxBI() {
   writeln("Max buddha: ", max_bi);
 
   double local_sums = 0;
-  foreach (k, v; large_array) {
+  foreach (k, v; buddha_data) {
     long sum = 0;
     foreach (key, value; v) {
       sum += value;
@@ -330,7 +330,7 @@ void updateMaxBI() {
 }
 
 Color4f getBuddhabrotted(int pZr, int pZi) {
-  const int v = large_array[pZr][pZi];
+  const int v = buddha_data[pZr][pZi];
 
   double c =  pow( cast(double)(v) / cast(double)(max_bi), 0.25 );
   

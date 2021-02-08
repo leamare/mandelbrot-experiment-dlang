@@ -1,6 +1,8 @@
 {
 	"fileVersion": 1,
 	"versions": {
+		"cerealed": "0.6.11",
+		"concepts": "0.0.8",
 		"daffodil": "0.1.3",
 		"derelict-sfml2": "3.0.2",
 		"derelict-util": "2.0.6",

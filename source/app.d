@@ -5,17 +5,17 @@ import std.getopt;
 import std.conv;
 import std.string;
 import std.file;
-import std.json;
 import std.math;
 import std.typecons;
 
 import std.range;
 import std.parallelism;
+import cerealed;
+import std.algorithm : min;
 
 import dlib.image;
-// import daffodil.bmp;
 
-import pixel;
+import mandel;
 
 alias Coord = Tuple!(int, int);
 
@@ -37,6 +37,7 @@ int main(string[] args) {
 
 	string filename = "";
 	string dir = "out";
+	int saveProgress = 0;
 
 	auto helpInformation = getopt(
     args,
@@ -54,6 +55,8 @@ int main(string[] args) {
 		"type|t", "Fractal type (mandelbrot, multibrot, ship), mandelbrot by default", &type,
 		"colorfunc|c", "Coloring function (ultrafrac, hsv, gray, blue, red), ultrafrac by default", &colorfunc,
 		"exponent|e", "Multibrot exponent, 2.0 by default", &multibrotExp,
+		"progress|s", "Save results to a separate file while working/import progress on load if foundn\n" ~
+									"\t-1 for default block size (by percentage of lines), or any other int 1-50", &saveProgress,
   );
 
 	if (helpInformation.helpWanted) {
@@ -77,8 +80,7 @@ int main(string[] args) {
 			"_I=" ~ to!string(iter) ~ 
 			"_P=" ~ to!string(paletteSize) ~ 
 			"_C=" ~ to!string(colorfunc) ~ 
-			( type == FType.multibrot ? "_E=" ~ to!string(multibrotExp) : "") ~
-		".png";
+			( type == FType.multibrot ? "_E=" ~ to!string(multibrotExp) : "");
 	}
 
 	writeln("Iterations: ", iter);
@@ -102,31 +104,97 @@ int main(string[] args) {
 
 	if (buddha) enableBuddha();
 	if (paletteSize) setPaletteSize(paletteSize);
-	// if (colorfunc == ColorFunc.ultrafrac) setPaletteSize(to!int(paletteSize*0.35));
-	// setOrigin(0.0, 0.0, 1.0);
-	// setOrigin(-1.15, 0.1, 0.125);
-	// setOrigin(-1.25275, -0.343, 0.0025);
+
+	Iters[][] iters;
+
+	iters.length = w;
+
+	writeln("\nIterating");
+
+	if (saveProgress > 0 && saveProgress < 50) {
+		int loaded = 0;
+
+		if (exists(dir ~ "/" ~ filename ~ ".tmp")) {
+			writeln("-- Progress data found --");
+			auto inData = cast(const(ubyte)[])read(dir ~ "/" ~ filename ~ ".tmp");
+			iters = decerealise!(Iters[][])(inData);
+			if (iters.length == w) {
+				loaded = 0;
+				foreach (line; iters) {
+					if (line.length == h) {
+						loaded++;
+						continue;
+					} else {
+						break;
+					}
+				}
+				writeln("-- Data loaded, ", loaded, " lines --");
+			} else {
+				iters.length = w;
+			}
+		}
+
+		const int blockSize = saveProgress * wfactor;
+
+		const endp = to!int( ceil( w/to!double(blockSize) ) );
+		for(int block = 0; block < endp; block++) {
+			auto blockEnd = (block+1)*blockSize;
+			auto wRange = iota(block*blockSize, min(blockEnd, w));
+			foreach (i; parallel(wRange)) {
+				if (iters[i].length != h) {
+					iters[i].length = h;
+					for(int j = 0; j < h; j++) {
+						iters[i][j] = iterate(i, j, w, h);
+					}
+				} 
+				if (i % wfactor == 0) {
+					write ('.');
+				}
+			}
+			write (' ');
+
+			if (loaded >= blockEnd || w <= blockEnd)
+				continue;
+
+			auto inData = iters.cerealise;
+			std.file.write(dir ~ "/" ~ filename ~ ".tmp", inData);
+			write ("! ");
+		}
+		remove(dir ~ "/" ~ filename ~ ".tmp");
+	} else {
+		auto wRange = iota(0, w);
+		foreach (i; parallel(wRange)) {
+			// Iters iters;
+			iters[i].length = h;
+			for(int j = 0; j < h; j++) {
+				iters[i][j] = iterate(i, j, w, h);
+			}
+			if (i % wfactor == 0) {
+				write ('.');
+			}
+		}
+	}
+
+	auto wRange = iota(0, w);
 
 	SuperImage img = image(w, h);
 
-	auto wRange = iota(0, w);
-	//for(int i = 0; i < w; i++) {
+	writeln("\nGenerating image");
 	foreach (i; parallel(wRange)) {
-		Iters iters;
-		if (i % wfactor == 0) write ('.');
 		for(int j = 0; j < h; j++) {
-			iters = iterate(i, j, w, h);
-			img[i, j] = pixelcolor(iters[0], iters[1]);
+			img[i, j] = pixelcolor(iters[i][j].i, iters[i][j].d);
+		}
+		if (i % wfactor == 0) {
+			write ('.');
 		}
 	}
 
 	writeln("\nMain set");
-	savePNG(img, dir ~ "/" ~ filename);
+	savePNG(img, dir ~ "/" ~ filename ~ ".png");
 
 	if (buddha) {
 		updateMaxBI();
 		for(int i = 0; i < w; i++) {
-			// writeln(i);
 			if (i % wfactor == 0) write ('.');
 			for(int j = 0; j < h; j++) {
 				img[i, j] = getBuddhabrotted(i, j);
@@ -134,7 +202,7 @@ int main(string[] args) {
 		}
 		
 		writeln("\nBuddha");
-		savePNG(img, dir ~ "/buddha_" ~ filename);
+		savePNG(img, dir ~ "/buddha_" ~ filename ~ ".png");
 	}
 
 	return 0;
