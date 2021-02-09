@@ -23,7 +23,7 @@ int main(string[] args) {
 	int amp = 50;
 	int w = 0;
 	int h = 0;
-	int iter = 100;
+	uint iter = 100;
 
 	double originX = -0.5;
 	double originY = 0.0;
@@ -32,6 +32,8 @@ int main(string[] args) {
 
 	int paletteSize = 0;
 	bool buddha = false;
+	bool antibuddha = false;
+
 	FType type;
 	ColorFunc colorfunc;
 
@@ -49,6 +51,7 @@ int main(string[] args) {
 		"originy|y", "Center of origin imaginary part (y), "~to!string(originY)~" by default", &originY,
 		"radius|r", "Radius of calculated zone, "~to!string(radius)~" by default", &radius,
 		"buddha|b", "Calculate Buddhabrot, False by default", &buddha,
+		"antibuddha|n", "Calculate Antibuddhabrot, False by default, disabled if -b", &antibuddha,
 		"palletesize|p", "Pallete scale, MAX_ITER by default", &paletteSize,
 		"output|o", "Output filename, generated based on parameters by default", &filename,
 		"dir|d", "Output directory, `out` by default (created if does not exists)", &dir,
@@ -102,7 +105,9 @@ int main(string[] args) {
 	setOrigin(originX, originY, radius);
 	if (type == FType.multibrot) setMultibrotBase(multibrotExp);
 
-	if (buddha) enableBuddha();
+	if (buddha) setBuddha(BuddhaState.buddha);
+	else if (antibuddha) setBuddha(BuddhaState.antibuddha);
+
 	if (paletteSize) setPaletteSize(paletteSize);
 
 	Iters[][] iters;
@@ -132,6 +137,40 @@ int main(string[] args) {
 			} else {
 				iters.length = w;
 			}
+
+			if (buddha) {
+				if (exists(dir ~ "/buddha_" ~ filename ~ ".tmp")) {
+					writeln("-- Buddha data detected --");
+					inData = cast(const(ubyte)[])read(dir ~ "/buddha_" ~ filename ~ ".tmp");
+					int[][] tmpdata = decerealise!(int[][])(inData);
+					for(int i=0; i < w; i++) {
+						for(int j=0; j < h; j++) {
+							mandel.buddha_data[i][j] = tmpdata[i][j];
+						}
+					}
+					writeln("-- Buddha data loaded --");
+				} else {
+					writeln("!! WARNING no buddha data found! !!");
+					writeln("-- if you want buddhabrot please make a rerun --");
+				}
+			}
+
+			if (antibuddha) {
+				if (exists(dir ~ "/antibuddha_" ~ filename ~ ".tmp")) {
+					writeln("-- Antibuddha data detected --");
+					inData = cast(const(ubyte)[])read(dir ~ "/antibuddha_" ~ filename ~ ".tmp");
+					int[][] tmpdata = decerealise!(int[][])(inData);
+					for(int i=0; i < w; i++) {
+						for(int j=0; j < h; j++) {
+							mandel.buddha_data[i][j] = tmpdata[i][j];
+						}
+					}
+					writeln("-- Antibuddha data loaded --");
+				} else {
+					writeln("!! WARNING no antibuddha data found! !!");
+					writeln("-- if you want antibuddhabrot please make a rerun --");
+				}
+			}
 		}
 
 		const int blockSize = saveProgress * wfactor;
@@ -158,6 +197,18 @@ int main(string[] args) {
 
 			auto inData = iters.cerealise;
 			std.file.write(dir ~ "/" ~ filename ~ ".tmp", inData);
+
+			if (buddha || antibuddha) {
+				int[][] tmpdata;
+				tmpdata.length = w;
+				for(int bi=0; bi < w; bi++) {
+					tmpdata[bi].length = h;
+					for(int bj=0; bj < h; bj++) {
+						tmpdata[bi][bj] = mandel.buddha_data[bi][bj];
+					}
+				}
+				std.file.write(dir ~ "/" ~ (antibuddha ? "anti" : "") ~ "buddha_" ~ filename ~ ".tmp", tmpdata.cerealise);
+			}
 			write ("! ");
 		}
 		remove(dir ~ "/" ~ filename ~ ".tmp");
@@ -192,7 +243,7 @@ int main(string[] args) {
 	writeln("\nMain set");
 	savePNG(img, dir ~ "/" ~ filename ~ ".png");
 
-	if (buddha) {
+	if (buddha || antibuddha) {
 		updateMaxBI();
 		for(int i = 0; i < w; i++) {
 			if (i % wfactor == 0) write ('.');
@@ -201,8 +252,13 @@ int main(string[] args) {
 			}
 		}
 		
-		writeln("\nBuddha");
-		savePNG(img, dir ~ "/buddha_" ~ filename ~ ".png");
+		if (buddha) {
+			writeln("\nBuddha");
+			savePNG(img, dir ~ "/buddha_" ~ filename ~ ".png");
+		} else {
+			writeln("\nAntibuddha");
+			savePNG(img, dir ~ "/antibuddha_" ~ filename ~ ".png");
+		}
 	}
 
 	return 0;

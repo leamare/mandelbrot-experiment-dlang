@@ -23,18 +23,20 @@ const auto logHalfBase = log(0.5)*logBase;
 alias Complex = Tuple!(double, double);
 alias Coord = Tuple!(int, int);
 struct Iters { int i; double d; this(int iv, double dv) { this.i = iv; this.d = dv; } };
+
 enum FType { mandelbrot, multibrot, ship }
 enum ColorFunc { ultrafrac, hsv, gray, blue, red, base }
+enum BuddhaState { none, buddha, antibuddha }
 
 shared int[][] buddha_data;
-shared int max_i = 20;
+shared uint max_i = 20;
 shared int max_bi = 1;
 shared int min_bi = 20;
 
 shared Complex origin = Complex(0.5, 0.0);
 shared double radius = 2.0;
 
-shared bool buddha = false;
+shared BuddhaState buddha = BuddhaState.none;
 shared int paletteSize = 20;
 
 shared FType type;
@@ -86,7 +88,7 @@ void setOrigin(double centerX, double centerY, double newRadius) {
   radius = newRadius;
 }
 
-void enableBuddha(bool state = true) {
+void setBuddha(BuddhaState state = BuddhaState.none) {
   buddha = state;
 }
 
@@ -205,8 +207,8 @@ Iters iterate(int pZi, int pZr, int w, int h) {
     }
   }
 
-  if (buddha) {
-    if (iter < max_i) {
+  if (buddha != BuddhaState.none) {
+    if (iter < max_i || buddha == BuddhaState.antibuddha) {
       for (int i=0; i<iter; i++) {
         Coord point = convertPointToPixel( iter_history[i][0], iter_history[i][1], w, h );
         if (point[1] >= h || point[0] >= w || point[0] < 0 || point[1] < 0) {
