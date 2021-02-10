@@ -41,6 +41,16 @@ void brotFlow(BrotParams desc) {
 }
 
 string generateFileName(BrotParams s) {
+  return to!string(s.type) ~ 
+    "_X=" ~ format!"%.17g"(s.originX) ~
+    "_Y=" ~ format!"%.17g"(s.originY) ~
+    "_R=" ~ format!"%.17g"(s.radius) ~
+    "_W=" ~ to!string(s.width) ~
+    "_H=" ~ to!string(s.height) ~
+    "_I=" ~ to!string(s.dwell) ~ 
+    "_P=" ~ to!string(s.palette ? s.palette : s.dwell) ~ 
+    "_C=" ~ to!string(s.colorfunc) ~ 
+    ( s.type == FType.multibrot ? "_E=" ~ to!string(s.multibrotExp) : "");
 }
 
 void generateAnimateSequence() {}
