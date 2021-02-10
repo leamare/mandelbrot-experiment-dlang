@@ -20,9 +20,17 @@ import dlib.image.hsv;
 const auto logBase = 1.0 / log(2.0);
 const auto logHalfBase = log(0.5)*logBase;
 
-alias Complex = Tuple!(double, double);
+alias Complex = Tuple!(real, real);
 alias Coord = Tuple!(int, int);
-struct Iters { int i; double d; this(int iv, double dv) { this.i = iv; this.d = dv; } };
+
+struct Iters { 
+  int i; 
+  double d; 
+  this(int iv, double dv) { 
+    this.i = iv; 
+    this.d = dv; 
+  }
+}
 
 enum FType { mandelbrot, multibrot, ship }
 enum ColorFunc { ultrafrac, hsv, gray, blue, red, base }
@@ -34,7 +42,7 @@ shared int max_bi = 1;
 shared int min_bi = 20;
 
 shared Complex origin = Complex(0.5, 0.0);
-shared double radius = 2.0;
+shared real radius = 2.0;
 
 shared BuddhaState buddha = BuddhaState.none;
 shared int paletteSize = 20;
@@ -81,7 +89,7 @@ void setIter(int i) {
   paletteSize = cast(int)(i*0.3);
 }
 
-void setOrigin(double centerX, double centerY, double newRadius) {
+void setOrigin(real centerX, real centerY, real newRadius) {
   origin[0] = -centerX;
   origin[1] = centerY;
   // origin = Complex(-centerX, centerY);
@@ -118,16 +126,16 @@ Iters iterate(int pZi, int pZr, int w, int h) {
     iter_history.length = max_i+1;
 
   const Complex convertedPoint = convertPixelToPoint(pZr, pZi, w, h);
-  const double Cr = convertedPoint[0];
-  const double Ci = convertedPoint[1];
+  const real Cr = convertedPoint[0];
+  const real Ci = convertedPoint[1];
 
-	double Zr = 0;
-	double Zi = 0;
+	real Zr = 0;
+	real Zi = 0;
 	int iter;
 	double Zr_temp = 0;
 
   if (type == FType.multibrot && multibrotExp != 2.0) {
-    double r;
+    real r;
 
     // using std.complex it would be easier
     // but it wouldn't be interesting enough
@@ -226,7 +234,7 @@ Iters iterate(int pZi, int pZr, int w, int h) {
   }
 
 	if (iter < max_i) {
-		const double log_zn = log(Zr*Zr + Zi*Zi) * 0.5;
+		const real log_zn = log(Zr*Zr + Zi*Zi) * 0.5;
 		const double nu = log( log_zn * logBase ) * logBase;
 
     iter_d = 1 + to!double(iter) - nu;
@@ -274,7 +282,7 @@ Color4f pixelcolor(int iter, double iter_d) {
   }
 }
 
-Coord convertPointToPixel(double Cr, double Ci, int w, int h) {
+Coord convertPointToPixel(real Cr, real Ci, int w, int h) {
   int pZi, pZr;
   double di, dr;
 
@@ -295,7 +303,7 @@ Coord convertPointToPixel(double Cr, double Ci, int w, int h) {
 }
 
 Complex convertPixelToPoint(int pZr, int pZi, int w, int h) {
-  double Cr, Ci;
+  real Cr, Ci;
   double di, dr;
 
   if (w == h) {
