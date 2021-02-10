@@ -6,60 +6,51 @@ import std.conv;
 import std.string;
 import std.file;
 import std.math;
-import std.typecons;
 
 import std.range;
 import std.parallelism;
 import cerealed;
-import std.algorithm : min;
 
 import dlib.image;
 
 import mandel;
-
-alias Coord = Tuple!(int, int);
+import flow;
 
 int main(string[] args) {
 	int amp = 50;
 	int w = 0;
 	int h = 0;
-	uint iter = 100;
 
-	double originX = -0.5;
-	double originY = 0.0;
-	double radius = 2.0;
-	float multibrotExp = 2.0;
+	BrotParams cli = BrotParams();
 
-	int paletteSize = 0;
 	bool buddha = false;
 	bool antibuddha = false;
 
-	FType type;
-	ColorFunc colorfunc;
-
 	string filename = "";
-	string dir = "out";
-	int saveProgress = 0;
+	string flowlist = "";
+	
+	BrotParams[] queue;
 
 	auto helpInformation = getopt(
     args,
-    "iterations|i", "Number of iterations to perform, "~to!string(iter)~" by default", &iter,
+    "iterations|i", "Number of iterations to perform, "~to!string(cli.dwell)~" by default", &cli.dwell,
 		"amp|a", "AMP of the image, used to calculate its size, "~to!string(amp)~" by default", &amp,
 		"width|ws", "Width of the image, 16*amp by default", &w,
 		"height|hs", "Height of the image, 16*amp by default", &h,
-		"originx|x", "Center of origin real part (x), "~to!string(originX)~" by default", &originX,
-		"originy|y", "Center of origin imaginary part (y), "~to!string(originY)~" by default", &originY,
-		"radius|r", "Radius of calculated zone, "~to!string(radius)~" by default", &radius,
+		"originx|x", "Center of origin real part (x), "~to!string(cli.originX)~" by default", &cli.originX,
+		"originy|y", "Center of origin imaginary part (y), "~to!string(cli.originY)~" by default", &cli.originY,
+		"radius|r", "Radius of calculated zone, "~to!string(radius)~" by default", &cli.radius,
 		"buddha|b", "Calculate Buddhabrot, False by default", &buddha,
 		"antibuddha|n", "Calculate Antibuddhabrot, False by default, disabled if -b", &antibuddha,
-		"palletesize|p", "Pallete scale, MAX_ITER by default", &paletteSize,
+		"palletesize|p", "Pallete scale, MAX_ITER by default", &cli.palette,
 		"output|o", "Output filename, generated based on parameters by default", &filename,
-		"dir|d", "Output directory, `out` by default (created if does not exists)", &dir,
-		"type|t", "Fractal type (mandelbrot, multibrot, ship), mandelbrot by default", &type,
-		"colorfunc|c", "Coloring function (ultrafrac, hsv, gray, blue, red), ultrafrac by default", &colorfunc,
-		"exponent|e", "Multibrot exponent, 2.0 by default", &multibrotExp,
+		"dir|d", "Output directory, `out` by default (created if does not exists)", &flow.workdir,
+		"type|t", "Fractal type (mandelbrot, multibrot, ship), mandelbrot by default", &cli.type,
+		"colorfunc|c", "Coloring function (ultrafrac, hsv, gray, blue, red), ultrafrac by default", &cli.colorfunc,
+		"exponent|e", "Multibrot exponent, 2.0 by default", &cli.multibrotExp,
 		"progress|s", "Save results to a separate file while working/import progress on load if foundn\n" ~
-									"\t-1 for default block size (by percentage of lines), or any other int 1-50", &saveProgress,
+									"\t-1 for default block size (by percentage of lines), or any other int 1-50", &flow.saveProgress,
+		"flowlist|f", "JSON list of things to generate", &flowlist,
   );
 
 	if (helpInformation.helpWanted) {
@@ -68,197 +59,42 @@ int main(string[] args) {
 		return 0;
   }
 
-	if (!w) w = 16*amp;
-	if (!h) h = 16*amp;
+	// generate flow
 
-	const int wfactor = to!int( floor(to!double(w) / 100.0) );
+	// if file specified:
+	//		go through list
+	//			if "animate" is set to true: generate sequence
+	// 			if "chunked" is true: generate sequence
+	//	else 
+	// 		generate descriptor based on cli args
 
-	if (!filename.length) {
-		filename = to!string(type) ~ 
-			"_X=" ~ format!"%.17g"(originX) ~
-			"_Y=" ~ format!"%.17g"(originY) ~
-			"_R=" ~ format!"%.17g"(radius) ~
-			"_W=" ~ to!string(w) ~
-			"_H=" ~ to!string(h) ~
-			"_I=" ~ to!string(iter) ~ 
-			"_P=" ~ to!string(paletteSize) ~ 
-			"_C=" ~ to!string(colorfunc) ~ 
-			( type == FType.multibrot ? "_E=" ~ to!string(multibrotExp) : "");
-	}
+	// if (flowlist != "") {
+	// 	// TODO:
+	// } else {
+		cli.width = w ? w : 16*amp;
+		cli.height = h ? h : 16*amp;
 
-	writeln("Iterations: ", iter);
-	writeln("Image size: ", w, " x ", h);
-	writeln("Origin: ", format!"%.17g"(originX), (originY < 0 ? " - " : " + "), format!"%.17g"(originY), "i");
-	writeln("Viewpoint radius: ", format!"%.17g"(radius));
-	writeln("Palette size: ", paletteSize ? paletteSize : iter);
-	writeln("Buddha: ", to!string(buddha));
-
-	writeln("Filename postfix: ", filename);
-
-	if (!dir.exists) dir.mkdir;
-
-	if (colorfunc != ColorFunc.init) setColorFunc(colorfunc);
-	if (type != FType.init) setType(type);
-
-	initArr(w, h);
-	setIter(iter);
-	setOrigin(originX, originY, radius);
-	if (type == FType.multibrot) setMultibrotBase(multibrotExp);
-
-	if (buddha) setBuddha(BuddhaState.buddha);
-	else if (antibuddha) setBuddha(BuddhaState.antibuddha);
-
-	if (paletteSize) setPaletteSize(paletteSize);
-
-	Iters[][] iters;
-
-	iters.length = w;
-
-	writeln("\nIterating");
-
-	if (saveProgress > 0 && saveProgress < 50) {
-		int loaded = 0;
-
-		if (exists(dir ~ "/" ~ filename ~ ".tmp")) {
-			writeln("-- Progress data found --");
-			auto inData = cast(const(ubyte)[])read(dir ~ "/" ~ filename ~ ".tmp");
-			iters = decerealise!(Iters[][])(inData);
-			if (iters.length == w) {
-				loaded = 0;
-				foreach (line; iters) {
-					if (line.length == h) {
-						loaded++;
-						continue;
-					} else {
-						break;
-					}
-				}
-				writeln("-- Data loaded, ", loaded, " lines --");
-			} else {
-				iters.length = w;
-			}
-
-			if (buddha) {
-				if (exists(dir ~ "/buddha_" ~ filename ~ ".tmp")) {
-					writeln("-- Buddha data detected --");
-					inData = cast(const(ubyte)[])read(dir ~ "/buddha_" ~ filename ~ ".tmp");
-					int[][] tmpdata = decerealise!(int[][])(inData);
-					for(int i=0; i < w; i++) {
-						for(int j=0; j < h; j++) {
-							mandel.buddha_data[i][j] = tmpdata[i][j];
-						}
-					}
-					writeln("-- Buddha data loaded --");
-				} else {
-					writeln("!! WARNING no buddha data found! !!");
-					writeln("-- if you want buddhabrot please make a rerun --");
-				}
-			}
-
-			if (antibuddha) {
-				if (exists(dir ~ "/antibuddha_" ~ filename ~ ".tmp")) {
-					writeln("-- Antibuddha data detected --");
-					inData = cast(const(ubyte)[])read(dir ~ "/antibuddha_" ~ filename ~ ".tmp");
-					int[][] tmpdata = decerealise!(int[][])(inData);
-					for(int i=0; i < w; i++) {
-						for(int j=0; j < h; j++) {
-							mandel.buddha_data[i][j] = tmpdata[i][j];
-						}
-					}
-					writeln("-- Antibuddha data loaded --");
-				} else {
-					writeln("!! WARNING no antibuddha data found! !!");
-					writeln("-- if you want antibuddhabrot please make a rerun --");
-				}
-			}
-		}
-
-		const int blockSize = saveProgress * wfactor;
-
-		const endp = to!int( ceil( w/to!double(blockSize) ) );
-		for(int block = 0; block < endp; block++) {
-			auto blockEnd = (block+1)*blockSize;
-			auto wRange = iota(block*blockSize, min(blockEnd, w));
-			foreach (i; parallel(wRange)) {
-				if (iters[i].length != h) {
-					iters[i].length = h;
-					for(int j = 0; j < h; j++) {
-						iters[i][j] = iterate(i, j, w, h);
-					}
-				} 
-				if (i % wfactor == 0) {
-					write ('.');
-				}
-			}
-			write (' ');
-
-			if (loaded >= blockEnd || w <= blockEnd)
-				continue;
-
-			auto inData = iters.cerealise;
-			std.file.write(dir ~ "/" ~ filename ~ ".tmp", inData);
-
-			if (buddha || antibuddha) {
-				int[][] tmpdata;
-				tmpdata.length = w;
-				for(int bi=0; bi < w; bi++) {
-					tmpdata[bi].length = h;
-					for(int bj=0; bj < h; bj++) {
-						tmpdata[bi][bj] = mandel.buddha_data[bi][bj];
-					}
-				}
-				std.file.write(dir ~ "/" ~ (antibuddha ? "anti" : "") ~ "buddha_" ~ filename ~ ".tmp", tmpdata.cerealise);
-			}
-			write ("! ");
-		}
-		remove(dir ~ "/" ~ filename ~ ".tmp");
-	} else {
-		auto wRange = iota(0, w);
-		foreach (i; parallel(wRange)) {
-			// Iters iters;
-			iters[i].length = h;
-			for(int j = 0; j < h; j++) {
-				iters[i][j] = iterate(i, j, w, h);
-			}
-			if (i % wfactor == 0) {
-				write ('.');
-			}
-		}
-	}
-
-	auto wRange = iota(0, w);
-
-	SuperImage img = image(w, h);
-
-	writeln("\nGenerating image");
-	foreach (i; parallel(wRange)) {
-		for(int j = 0; j < h; j++) {
-			img[i, j] = pixelcolor(iters[i][j].i, iters[i][j].d);
-		}
-		if (i % wfactor == 0) {
-			write ('.');
-		}
-	}
-
-	writeln("\nMain set");
-	savePNG(img, dir ~ "/" ~ filename ~ ".png");
-
-	if (buddha || antibuddha) {
-		updateMaxBI();
-		for(int i = 0; i < w; i++) {
-			if (i % wfactor == 0) write ('.');
-			for(int j = 0; j < h; j++) {
-				img[i, j] = getBuddhabrotted(i, j);
-			}
-		}
-		
-		if (buddha) {
-			writeln("\nBuddha");
-			savePNG(img, dir ~ "/buddha_" ~ filename ~ ".png");
+		if (!filename.length) {
+			cli.filename = flow.generateFileName(cli);
 		} else {
-			writeln("\nAntibuddha");
-			savePNG(img, dir ~ "/antibuddha_" ~ filename ~ ".png");
+			cli.filename = filename;
 		}
+
+		if (buddha) cli.buddha = BuddhaState.buddha;
+		else if (antibuddha) cli.buddha = BuddhaState.antibuddha;
+
+		queue.length++;
+		queue[] = cli;
+	// }
+
+	if (!flow.workdir.exists) flow.workdir.mkdir;
+
+	// to flow
+
+	// queue
+	// only one image per time
+	foreach(request; queue) {
+		request.brotFlow();
 	}
 
 	return 0;
