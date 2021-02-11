@@ -7,6 +7,6 @@
 		"derelict-sfml2": "3.0.2",
 		"derelict-util": "2.0.6",
 		"dlib": "0.20.0",
-		"unit-threaded": "0.6.36"
+		"unit-threaded": "0.7.55"
 	}
 }

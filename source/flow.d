@@ -6,11 +6,12 @@ import std.conv;
 import std.math;
 import std.typecons;
 import std.string;
+import std.json;
 
 import std.range;
 import std.parallelism;
 import cerealed;
-import std.algorithm : min;
+import std.algorithm : min, max;
 
 import dlib.image;
 
@@ -18,6 +19,7 @@ import mandel;
 
 string workdir = "out";
 int saveProgress = 0;
+bool skipExisting = false;
 
 struct BrotParams {
   int width = 800;
@@ -47,7 +49,12 @@ struct BrotParams {
  */
 
 void brotFlow(BrotParams desc) {
-  if (desc.colorfunc != ColorFunc.init) mandel.setColorFunc(colorfunc);
+	if (skipExisting && exists(workdir ~ "/" ~ desc.filename ~ ".png")) {
+		writeln("File `" ~ desc.filename ~ "` exists, skipping...\n");
+		return;
+	}
+
+  if (desc.colorfunc != ColorFunc.init) mandel.setColorFunc(desc.colorfunc);
 	if (desc.type != FType.init) mandel.setType(type);
 
 	mandel.initArr(desc.width, desc.height);
@@ -219,7 +226,7 @@ void brotFlow(BrotParams desc) {
 		}
 	}
 
-	writeln("----------");
+	writeln("--------------------\n");
 }
 
 string generateFileName(BrotParams s) {
@@ -235,5 +242,100 @@ string generateFileName(BrotParams s) {
     ( s.type == FType.multibrot ? "_E=" ~ to!string(s.multibrotExp) : "");
 }
 
-void generateAnimateSequence() {}
+BrotParams createBrotDesc(JSONValue s) {
+	BrotParams ret = BrotParams();
+	
+	if (s.type != JSONType.object) return ret;
+
+	if ("width" in s && s["width"].integer) ret.width = to!int(s["width"].integer);
+	if ("height" in s && s["height"].integer) ret.height = to!int(s["height"].integer);
+
+	if ("amp" in s && s["amp"].integer) {
+		ret.width = 16 * to!int(s["amp"].integer);
+		ret.height = 16 * to!int(s["amp"].integer);
+	}
+
+	if ("x1" in s && "x2" in s && "y1" in s && "y2" in s) {
+		const auto x = ( s["x1"].floating + s["x2"].floating ) / 2;
+		const auto y = ( s["y1"].floating + s["y2"].floating ) / 2;
+		const auto radX = max(s["x1"].floating, s["x2"].floating) - min(s["x1"].floating, s["x2"].floating);
+		const auto radY = max(s["y1"].floating, s["y2"].floating) - min(s["y1"].floating, s["y2"].floating);
+
+		ret.originX = x;
+		ret.originY = y;
+		ret.radius = max(radX, radY);
+	}
+
+	if ("x" in s) ret.originX = s["x"].floating;
+	if ("y" in s) ret.originY = s["y"].floating;
+	if ("radius" in s) ret.radius = s["radius"].floating;
+
+	if ("dwell" in s && s["dwell"].integer) ret.dwell = to!int(s["dwell"].integer);
+	if ("palette" in s && s["palette"].integer >= 0) ret.palette = to!int(s["palette"].integer);
+
+	if ("multibrotExp" in s) ret.multibrotExp = s["multibrotExp"].floating;
+
+	if ("type" in s) ret.type = to!FType(s["dwell"].str);
+	if ("colorfunc" in s) ret.colorfunc = to!ColorFunc(s["colorfunc"].str);
+
+	if ("buddha" in s && s["buddha"].boolean) {
+		ret.buddha = BuddhaState.buddha;
+	} else if ("antibuddha" in s && s["antibuddha"].boolean) {
+		ret.buddha = BuddhaState.antibuddha;
+	}
+
+	if ("filename" in s) {
+		ret.filename = s["filename"].str;
+	} else {
+		ret.filename = ret.generateFileName();
+	}
+
+	return ret;
+}
+
+void generateAnimateSequence(ref BrotParams[] queue, JSONValue animate) {
+	const int frames = to!int(animate["animate"].integer);
+	const BrotParams from = createBrotDesc(animate["from"]);
+	const BrotParams endp = createBrotDesc(animate["to"]);
+	//const string fpath = from.filename ~ "++" ~ endp.filename ~ "_FRAMES=" ~ to!string(frames) ~ "/";
+	const string fpath = "animate_FRAMES=" ~ to!string(frames) ~ "_X0=" ~ format!"%.17g"(from.originX) ~ "_Y0=" ~ 
+		format!"%.17g"(from.originY) ~ "_Rn=" ~ format!"%.17g"(endp.radius) ~ "/";
+
+	if (!(workdir ~ "/" ~ fpath).exists) (workdir ~ "/" ~ fpath).mkdir;
+
+	const double deltaX = (endp.originX - from.originX) / to!double(frames);
+	const double deltaY = (endp.originY - from.originY) / to!double(frames);
+	const double deltaRadius = (log(endp.radius) - log(from.radius)) / to!double(frames);
+	const float deltaDwell = (log(endp.dwell) - log(from.dwell)) / to!double(frames);
+	const float deltaPalette = ( log(endp.palette ? endp.palette : endp.dwell) - 
+		log(from.palette ? from.palette : from.dwell) ) / to!double(frames);
+	const float deltaExp = (endp.multibrotExp - from.multibrotExp) / to!double(frames);
+
+	const int w = max(from.width, endp.width);
+	const int h = max(from.height, endp.height);
+
+	for(int i=0; i <= frames; i++) {
+		auto ret = BrotParams();
+
+		ret.width = w;
+		ret.height = h;
+		ret.originX = from.originX + deltaX * i;
+		ret.originY = from.originY + deltaY * i;
+		ret.radius = exp(log(from.radius) + deltaRadius * i);
+
+		ret.dwell = cast(int)exp( log(from.dwell) + deltaDwell * i);
+		ret.palette = cast(int)exp( log(from.palette) + deltaPalette * i);
+
+		ret.multibrotExp = from.multibrotExp + floor(deltaExp * i);
+
+		ret.type = from.type;
+		ret.colorfunc = from.colorfunc;
+		ret.buddha = from.buddha;
+
+		ret.filename = fpath ~ "frame_" ~ format!"%06d"(i);
+
+		queue.length++;
+		queue[$-1] = ret;
+	}
+}
 void generateChunksSequence() {}

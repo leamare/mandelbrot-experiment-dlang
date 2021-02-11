@@ -6,12 +6,10 @@ import std.conv;
 import std.string;
 import std.file;
 import std.math;
+import std.json;
 
-import std.range;
-import std.parallelism;
-import cerealed;
-
-import dlib.image;
+//import dlib.image;
+// import decimal;
 
 import mandel;
 import flow;
@@ -51,6 +49,7 @@ int main(string[] args) {
 		"progress|s", "Save results to a separate file while working/import progress on load if foundn\n" ~
 									"\t-1 for default block size (by percentage of lines), or any other int 1-50", &flow.saveProgress,
 		"flowlist|f", "JSON list of things to generate", &flowlist,
+		"skip|k", "Skip existing files instead of recalculating them", &flow.skipExisting,
   );
 
 	if (helpInformation.helpWanted) {
@@ -61,16 +60,34 @@ int main(string[] args) {
 
 	// generate flow
 
-	// if file specified:
-	//		go through list
-	//			if "animate" is set to true: generate sequence
-	// 			if "chunked" is true: generate sequence
-	//	else 
-	// 		generate descriptor based on cli args
+	if (flowlist != "" && flowlist.exists()) {
+		JSONValue jsonList;
 
-	// if (flowlist != "") {
-	// 	// TODO:
-	// } else {
+		writeln("\nLoading " ~ flowlist ~ "\n");
+
+		try {
+			jsonList = flowlist.readText.parseJSON;
+			if (jsonList.type != JSONType.object && jsonList.type != JSONType.array)
+				throw new Exception("Invalid object");
+		} catch (Exception e) {
+			jsonList = "[{}]".parseJSON;
+		}
+
+		if (jsonList.type == JSONType.object) {
+			queue.length++;
+			queue[$-1] = jsonList.createBrotDesc();
+		} else {
+			foreach (obj; jsonList.array) {
+				if ("animate" in obj && obj["animate"].integer && "from" in obj && "to" in obj) {
+					flow.generateAnimateSequence(queue, obj);
+				}
+				//   if object has "animate" array - generate animation
+				//   if object has "chunked" and >0 - generate sequence of chunks
+				queue.length++;
+				queue[$-1] = obj.createBrotDesc();
+			}
+		}
+	} else {
 		cli.width = w ? w : 16*amp;
 		cli.height = h ? h : 16*amp;
 
@@ -85,7 +102,7 @@ int main(string[] args) {
 
 		queue.length++;
 		queue[] = cli;
-	// }
+	}
 
 	if (!flow.workdir.exists) flow.workdir.mkdir;
 

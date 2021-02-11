@@ -11,14 +11,16 @@ import core.atomic;
 import dlib.image.color;
 import dlib.image.hsv;
 
+// import decimal;
+
 // I don't really want to use it but I won't be able to calculate 
 // negative multibrots otherwise so yes, it's only used in ONE specific place
 // and in every other I'm doing in an old-fashioned way
 // I could've implement it myself, but I don't have any idea how to
 // import std.complex;
 
-const auto logBase = 1.0 / log(2.0);
-const auto logHalfBase = log(0.5)*logBase;
+const real logBase = 1.0 / log(2.0);
+const real logHalfBase = log(0.5)*logBase;
 
 alias Complex = Tuple!(real, real);
 alias Coord = Tuple!(int, int);
@@ -132,7 +134,7 @@ Iters iterate(int pZi, int pZr, int w, int h) {
 	real Zr = 0;
 	real Zi = 0;
 	int iter;
-	double Zr_temp = 0;
+	real Zr_temp = 0;
 
   if (type == FType.multibrot && multibrotExp != 2.0) {
     real r;
@@ -284,19 +286,19 @@ Color4f pixelcolor(int iter, double iter_d) {
 
 Coord convertPointToPixel(real Cr, real Ci, int w, int h) {
   int pZi, pZr;
-  double di, dr;
+  real di, dr;
 
   if (w == h) {
     di = 0;
     dr = 0;
   } else {
-    double diff = cast(double)( max(w, h)-min(w, h) )/min(w, h);
+    real diff = cast(real)( max(w, h)-min(w, h) )/min(w, h);
     di = w > h ? diff : -diff/2;
     dr = w > h ? -diff/2 : diff;
   }
 
-  pZi = cast(int)( round( (Cr + radius + origin[0] + di) * to!double(w)/(radius*2 + di*2) ) );
-  pZr = cast(int)( round( (Ci + radius + origin[1] + dr) * to!double(h)/(radius*2 + dr*2) ) );
+  pZi = cast(int)( round( (Cr + radius + origin[0] + di) * to!real(w)/(radius*2 + di*2) ) );
+  pZr = cast(int)( round( (Ci + radius + origin[1] + dr) * to!real(h)/(radius*2 + dr*2) ) );
 
 
   return Coord(pZi, pZr);
@@ -304,19 +306,19 @@ Coord convertPointToPixel(real Cr, real Ci, int w, int h) {
 
 Complex convertPixelToPoint(int pZr, int pZi, int w, int h) {
   real Cr, Ci;
-  double di, dr;
+  real di, dr;
 
   if (w == h) {
     di = 0;
     dr = 0;
   } else {
-    double diff = cast(double)( max(w, h)-min(w, h) )/min(w, h);
+    real diff = cast(real)( max(w, h)-min(w, h) )/min(w, h);
     di = w > h ? diff : -diff/2;
     dr = w > h ? -diff/2 : diff;
   }
 
-  Cr = (to!double(pZi)*(radius*2 + di*2)/to!double(w)) - radius - origin[0] - di;
-  Ci = (to!double(pZr)*(radius*2 + dr*2)/to!double(h)) - radius - origin[1] - dr;
+  Cr = (to!real(pZi)*(radius*2 + di*2)/to!real(w)) - radius - origin[0] - di;
+  Ci = (to!real(pZr)*(radius*2 + dr*2)/to!real(h)) - radius - origin[1] - dr;
 
   return Complex(Cr, Ci);
 }
