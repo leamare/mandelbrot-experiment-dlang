@@ -338,4 +338,47 @@ void generateAnimateSequence(ref BrotParams[] queue, JSONValue animate) {
 		queue[$-1] = ret;
 	}
 }
-void generateChunksSequence() {}
+void generateChunksSequence(ref BrotParams[] queue, JSONValue source) {
+	const int chunks = to!int(source["chunks"].integer);
+	const BrotParams s = createBrotDesc(source);
+
+	const string fpath = "CHUNKED=" ~ to!string(chunks) ~ "_" ~ s.filename ~ "/";
+
+	if (!(workdir ~ "/" ~ fpath).exists) (workdir ~ "/" ~ fpath).mkdir;
+
+	const int w = cast(int)( s.width / to!double(chunks) );
+	const int h = cast(int)( s.height / to!double(chunks) );
+
+  const double diff = cast(double)( min(w, h) )/max(w, h);
+  const double radiusX = s.radius * (w > h ? 1 : diff) / to!double(chunks);
+  const double radiusY = s.radius * (w < h ? 1 : diff) / to!double(chunks);
+
+	const double x1 = s.originX - (s.radius / to!double(chunks))*(chunks/2 + 1);
+	const double y1 = s.originY + (s.radius / to!double(chunks))*(chunks/2 + 1);
+
+	for(int i=0; i < chunks; i++) {
+		for(int j=0; j < chunks; j++) {
+			auto ret = BrotParams();
+
+			ret.width = w;
+			ret.height = h;
+			ret.originX = x1 + radiusX * (j*2 + 0.5);
+			ret.originY = y1 - radiusY * (i*2 + 0.5);
+			ret.radius = min(radiusX, radiusY);
+
+			ret.dwell = s.dwell;
+			ret.palette = s.palette;
+
+			ret.multibrotExp = s.multibrotExp;
+
+			ret.type = s.type;
+			ret.colorfunc = s.colorfunc;
+			ret.buddha = s.buddha;
+
+			ret.filename = fpath ~ "chunk_" ~ format!"%06d"(i*chunks+j);
+
+			queue.length++;
+			queue[$-1] = ret;
+		}
+	}
+}

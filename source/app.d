@@ -78,11 +78,18 @@ int main(string[] args) {
 			queue[$-1] = jsonList.createBrotDesc();
 		} else {
 			foreach (obj; jsonList.array) {
+				//   if object has "animate" array - generate animation
 				if ("animate" in obj && obj["animate"].integer && "from" in obj && "to" in obj) {
 					flow.generateAnimateSequence(queue, obj);
+					continue;
 				}
-				//   if object has "animate" array - generate animation
+
 				//   if object has "chunked" and >0 - generate sequence of chunks
+				if ("chunks" in obj && obj["chunks"].integer) {
+					flow.generateChunksSequence(queue, obj);
+					continue;
+				}
+				
 				queue.length++;
 				queue[$-1] = obj.createBrotDesc();
 			}
