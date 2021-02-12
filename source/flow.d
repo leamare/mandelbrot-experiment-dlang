@@ -311,8 +311,8 @@ void generateAnimateSequence(ref BrotParams[] queue, JSONValue animate) {
 		log(from.palette ? from.palette : from.dwell) ) / to!double(frames);
 	const float deltaExp = (endp.multibrotExp - from.multibrotExp) / to!double(frames);
 
-	const int w = max(from.width, endp.width);
-	const int h = max(from.height, endp.height);
+	const int w = from.width;
+	const int h = from.height;
 
 	for(int i=0; i <= frames; i++) {
 		auto ret = BrotParams();
@@ -353,8 +353,8 @@ void generateChunksSequence(ref BrotParams[] queue, JSONValue source) {
   const double radiusX = s.radius * (w > h ? 1 : diff) / to!double(chunks);
   const double radiusY = s.radius * (w < h ? 1 : diff) / to!double(chunks);
 
-	const double x1 = s.originX - (s.radius / to!double(chunks))*(chunks/2 + 1);
-	const double y1 = s.originY + (s.radius / to!double(chunks))*(chunks/2 + 1);
+	const double x1 = s.originX - (s.radius * (w > h ? 1 : diff) / to!double(chunks))*(chunks/2 + 2);
+	const double y1 = s.originY + (s.radius * (w < h ? 1 : diff) / to!double(chunks))*(chunks/2 + 2);
 
 	for(int i=0; i < chunks; i++) {
 		for(int j=0; j < chunks; j++) {
@@ -362,8 +362,8 @@ void generateChunksSequence(ref BrotParams[] queue, JSONValue source) {
 
 			ret.width = w;
 			ret.height = h;
-			ret.originX = x1 + radiusX * (j*2 + 0.5);
-			ret.originY = y1 - radiusY * (i*2 + 0.5);
+			ret.originX = x1 + radiusX * 2 * (j + 0.5);
+			ret.originY = y1 - radiusY * 2 * (i + 0.5);
 			ret.radius = min(radiusX, radiusY);
 
 			ret.dwell = s.dwell;
