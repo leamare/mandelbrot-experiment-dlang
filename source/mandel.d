@@ -292,13 +292,15 @@ Coord convertPointToPixel(real Cr, real Ci, int w, int h) {
     di = 0;
     dr = 0;
   } else {
-    real diff = cast(real)( max(w, h)-min(w, h) )/min(w, h);
-    di = w > h ? diff : -diff/2;
-    dr = w > h ? -diff/2 : diff;
+    real diff = cast(real)( max(w, h) - min(w, h) )/min(w, h);
+    di = w > h ? diff : 0;
+    dr = w > h ? 0 : diff;
   }
 
-  pZi = cast(int)( round( (Cr + radius + origin[0] + di) * to!real(w)/(radius*2 + di*2) ) );
-  pZr = cast(int)( round( (Ci + radius + origin[1] + dr) * to!real(h)/(radius*2 + dr*2) ) );
+  const auto p = radius*2/min(w, h);
+
+  pZi = cast(int)( round( (Cr + origin[0] + radius*(1 + di))/p ) );
+  pZr = cast(int)( round( (-Ci - origin[1] + radius*(1 + dr))/p ) );
 
 
   return Coord(pZi, pZr);
@@ -312,13 +314,15 @@ Complex convertPixelToPoint(int pZr, int pZi, int w, int h) {
     di = 0;
     dr = 0;
   } else {
-    real diff = cast(real)( max(w, h)-min(w, h) )/min(w, h);
-    di = w > h ? diff : -diff/2;
-    dr = w > h ? -diff/2 : diff;
+    real diff = cast(real)( max(w, h) - min(w, h) )/min(w, h);
+    di = w > h ? diff : 0;
+    dr = w > h ? 0 : diff;
   }
 
-  Cr = (to!real(pZi)*(radius*2 + di*2)/to!real(w)) - radius - origin[0] - di;
-  Ci = (to!real(pZr)*(radius*2 + dr*2)/to!real(h)) - radius - origin[1] - dr;
+  const auto p = radius*2/min(w, h);
+
+  Cr =  (to!real(pZi)*p) - (origin[0] + radius*(1 + di));
+  Ci = -(to!real(pZr)*p) + (origin[1] + radius*(1 + dr));
 
   return Complex(Cr, Ci);
 }
