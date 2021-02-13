@@ -111,6 +111,14 @@ const Color4f[] cnfsso_palette = [
   RGBtoColor4f(129, 178, 154),
   RGBtoColor4f(242, 204, 143)
 ];
+
+const Color4f[] acid_palette = [
+  RGBtoColor4f(239, 71, 111),
+  RGBtoColor4f(255, 209, 102),
+  RGBtoColor4f(6, 214, 160),
+  RGBtoColor4f(17, 138, 178),
+  RGBtoColor4f(7, 59, 76)
+];
 // preset functions
 
 void initArr(int w, int h) {
@@ -308,6 +316,10 @@ Color4f pixelcolor(int iter, double iter_d) {
       palette = fire_palette.dup;
     else if (colorfunc == ColorFunc.oceanid)
       palette = oceanid_palette.dup;
+    else if (colorfunc == ColorFunc.cnfsso)
+      palette = cnfsso_palette.dup;
+    else if (colorfunc == ColorFunc.acid)
+      palette = acid_palette.dup;
     else
       palette = ultrafrac_palette.dup;
 
