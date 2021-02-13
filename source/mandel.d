@@ -119,6 +119,15 @@ const Color4f[] acid_palette = [
   RGBtoColor4f(17, 138, 178),
   RGBtoColor4f(7, 59, 76)
 ];
+
+const Color4f[] softhours_palette = [
+  RGBtoColor4f(205, 180, 219),
+  RGBtoColor4f(255, 200, 221),
+  RGBtoColor4f(255, 175, 204),
+  RGBtoColor4f(189, 224, 254),
+  RGBtoColor4f(162, 210, 255)
+];
+
 // preset functions
 
 void initArr(int w, int h) {
@@ -320,6 +329,8 @@ Color4f pixelcolor(int iter, double iter_d) {
       palette = cnfsso_palette.dup;
     else if (colorfunc == ColorFunc.acid)
       palette = acid_palette.dup;
+    else if (colorfunc == ColorFunc.softhours)
+      palette = softhours_palette.dup;
     else
       palette = ultrafrac_palette.dup;
 
