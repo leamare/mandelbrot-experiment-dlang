@@ -351,9 +351,15 @@ Color4f pixelcolor(int iter, double iter_d) {
       palette[c1].b + (palette[c2].b - palette[c1].b) * vd,
     );
   } else if (colorfunc == ColorFunc.hsv) {
-    auto v = (iter_d/paletteSize % 1);
-    auto c = hsv(360.0*v, 1.0, 10.0*v);
-    return Color4f(c.b, c.g, c.r);
+    auto v = 2*(iter_d/paletteSize) % 2;
+
+    const auto vc = v > 1 ? 2-v : v;
+    v /= 2;
+    auto vl = 0.25+vc*2;
+    auto vs = 0.75+vc*2;
+
+    auto c = hsv(360.0*v, vs > 1 ? 1 : vs, vl > 1 ? 1 : vl);
+    return Color4f(c.r, c.g, c.b);
   } else if (colorfunc == ColorFunc.base) {
     if (iter_d > 0) return Color4f(1.0, 1.0, 1.0);
     return Color4f(0, 0, 0);
