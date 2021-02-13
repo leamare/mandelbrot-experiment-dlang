@@ -35,7 +35,7 @@ struct Iters {
 }
 
 enum FType { mandelbrot, multibrot, ship }
-enum ColorFunc { ultrafrac, hsv, gray, blue, red, base }
+}
 enum BuddhaState { none, buddha, antibuddha }
 
 shared int[][] buddha_data;
@@ -55,7 +55,10 @@ shared ColorFunc colorfunc;
 
 shared float multibrotExp = 2.0;
 
-const Color4f[] palette = [
+// custom palettes
+
+// aka "Earth and Sky"
+const Color4f[] ultrafrac_palette = [
   RGBtoColor4f(66, 30, 15),
   RGBtoColor4f(25, 7, 26),
   RGBtoColor4f(9, 1, 47),
@@ -74,6 +77,14 @@ const Color4f[] palette = [
   RGBtoColor4f(106, 52, 3),
 ];
 
+const Color4f[] seashore_palette = [
+  Color4f(0.7909, 0.9961, 0.763),
+  Color4f(0.8974, 0.8953, 0.6565),
+  Color4f(0.9465, 0.3161, 0.1267),
+  Color4f(0.5184, 0.1109, 0.0917),
+  Color4f(0.0198, 0.4563, 0.6839),
+  Color4f(0.5385, 0.8259, 0.8177)
+];
 // preset functions
 
 void initArr(int w, int h) {
@@ -257,10 +268,24 @@ Iters iterate(int pZi, int pZr, int w, int h) {
 Color4f pixelcolor(int iter, double iter_d) {
   if ( iter == max_i ) return Color4f(0,0,0);
 
-  if (colorfunc == ColorFunc.ultrafrac) {
+  if (colorfunc == ColorFunc.ultrafrac || colorfunc == ColorFunc.seashore || colorfunc == ColorFunc.fire || 
+    colorfunc == ColorFunc.oceanid || colorfunc == ColorFunc.cnfsso || colorfunc == ColorFunc.acid ||
+    colorfunc == ColorFunc.softhours) {
+
+    Color4f[] palette;
+
+    if (colorfunc == ColorFunc.ultrafrac)
+      palette = ultrafrac_palette.dup;
+    else if (colorfunc == ColorFunc.seashore)
+      palette = seashore_palette.dup;
+    else
+      palette = ultrafrac_palette.dup;
+
     ubyte c1, c2;
 
     auto paletteBlock = to!float(paletteSize)/palette.length;
+
+    iter_d = ( iter_d + paletteOffset*paletteSize ) % max_i;
 
     c1 = cast(ubyte)( floor(abs(iter_d)/paletteBlock) % palette.length );
     c2 = iter + paletteBlock >= max_i ? 4 : to!ubyte( (c1 + 1) % palette.length );
