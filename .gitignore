@@ -19,3 +19,6 @@ runs.txt
 *.png
 nebula*
 outputs*/
+animate.json
+places.json
+test.json

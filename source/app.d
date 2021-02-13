@@ -40,7 +40,7 @@ int main(string[] args) {
 		"radius|r", "Radius of calculated zone, "~to!string(radius)~" by default", &cli.radius,
 		"buddha|b", "Calculate Buddhabrot, False by default", &buddha,
 		"antibuddha|n", "Calculate Antibuddhabrot, False by default, disabled if -b", &antibuddha,
-		"palletesize|p", "Pallete scale, MAX_ITER by default", &cli.palette,
+		"palettesize|p", "Pallete scale, MAX_ITER by default", &cli.palette,
 		"output|o", "Output filename, generated based on parameters by default", &filename,
 		"dir|d", "Output directory, `out` by default (created if does not exists)", &flow.workdir,
 		"type|t", "Fractal type (mandelbrot, multibrot, ship), mandelbrot by default", &cli.type,

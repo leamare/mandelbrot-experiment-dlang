@@ -35,6 +35,19 @@ struct Iters {
 }
 
 enum FType { mandelbrot, multibrot, ship }
+enum ColorFunc {
+  ultrafrac,
+  hsv,
+  gray,
+  blue,
+  red,
+  base,
+  seashore,
+  fire,
+  oceanid,
+  cnfsso,
+  acid,
+  softhours
 }
 enum BuddhaState { none, buddha, antibuddha }
 
