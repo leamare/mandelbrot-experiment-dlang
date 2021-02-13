@@ -364,13 +364,14 @@ Color4f pixelcolor(int iter, double iter_d) {
     if (iter_d > 0) return Color4f(1.0, 1.0, 1.0);
     return Color4f(0, 0, 0);
   } else {
-    auto v = iter_d/paletteSize % 1;
+    auto v = 2*iter_d/paletteSize % 2;
+    v = v > 1 ? 2-v : v;
     // if (v > 1) v = 1.;
     if (colorfunc == ColorFunc.blue)
-      return Color4f(0, v*v, v);
+      return Color4f(pow(v, 4), pow(v, 2)*2, v*3);
     
     if (colorfunc == ColorFunc.red)
-      return Color4f(v, v*v, 0);
+      return Color4f(v*3, pow(v, 2)*2, pow(v, 4));
 
     return Color4f(v, v, v);
   }
