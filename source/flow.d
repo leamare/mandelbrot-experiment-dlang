@@ -28,6 +28,7 @@ struct BrotParams {
   real originY = 0.0;
   real radius  = 2.0;
   int palette = 0;
+	float paletteOffset = 0;
   uint dwell = 100;
   string filename;
 
@@ -54,17 +55,18 @@ void brotFlow(BrotParams desc) {
 		return;
 	}
 
-  if (desc.colorfunc != ColorFunc.init) mandel.setColorFunc(desc.colorfunc);
-	if (desc.type != FType.init) mandel.setType(type);
+  mandel.setColorFunc(desc.colorfunc);
+	mandel.setType(desc.type);
 
 	mandel.initArr(desc.width, desc.height);
 	mandel.setIter(desc.dwell);
 	mandel.setOrigin(desc.originX, desc.originY, desc.radius);
 	if (desc.type == FType.multibrot) mandel.setMultibrotBase(desc.multibrotExp);
 
-	if (desc.buddha != BuddhaState.init) mandel.setBuddha(desc.buddha);
+	mandel.setBuddha(desc.buddha);
 
-	if (desc.palette) mandel.setPaletteSize(desc.palette);
+	//if (desc.palette) 
+	mandel.setPaletteSize(desc.palette, desc.paletteOffset);
 
   const int wfactor = to!int( floor(to!double(desc.width) / 100.0) );
 
@@ -75,7 +77,7 @@ void brotFlow(BrotParams desc) {
 	writeln("Origin: ", format!"%.17g"(desc.originX), (desc.originY < 0 ? " - " : " + "), 
     format!"%.17g"(desc.originY), "i");
 	writeln("Viewpoint radius: ", format!"%.17g"(desc.radius));
-	writeln("Palette size: ", desc.palette ? desc.palette : desc.dwell);
+	writeln("Palette size: ", desc.palette ? desc.palette : desc.dwell, " + ", desc.paletteOffset);
 	writeln("Buddha: ", to!string(desc.buddha));
 
 	writeln("Filename: ", desc.filename);
@@ -113,9 +115,10 @@ void brotFlow(BrotParams desc) {
 			}
 
 			if (desc.buddha != BuddhaState.none) {
-				if (exists(workdir ~ "/" ~ (desc.buddha == BuddhaState.buddha ? "" : "anti") ~ "buddha_" ~ desc.filename ~ ".tmp")) {
+				if (exists(workdir ~ "/" ~ (desc.buddha == BuddhaState.buddha ? "" : "anti") ~ "buddha_" ~ desc.filename ~ ".tmp")){
 					writeln("-- " ~ (desc.buddha == BuddhaState.buddha ? "Buddha" : "Antibuddha") ~ " data detected --");
-					progdata = cast(const(ubyte)[])read(workdir ~ "/" ~ (desc.buddha == BuddhaState.buddha ? "" : "anti") ~ "buddha_" ~ desc.filename ~ ".tmp");
+					progdata = cast(const(ubyte)[])read(workdir ~ "/" ~ 
+						(desc.buddha == BuddhaState.buddha ? "" : "anti") ~ "buddha_" ~ desc.filename ~ ".tmp");
 
 					int[][] tmpdata = decerealise!(int[][])(progdata);
 					for(int i=0; i < desc.width; i++) {
@@ -126,7 +129,8 @@ void brotFlow(BrotParams desc) {
 					writeln("-- " ~ (desc.buddha == BuddhaState.buddha ? "Buddha" : "Antibuddha") ~ " data loaded --");
 				} else {
 					writeln("!! WARNING no buddha data found! !!");
-					writeln("-- if you want " ~ (desc.buddha == BuddhaState.buddha ? "buddha" : "antibuddha") ~ "brot please make a rerun --");
+					writeln("-- if you want " ~ 
+						(desc.buddha == BuddhaState.buddha ? "buddha" : "antibuddha") ~ "brot please make a rerun --");
 				}
 			}
 		}
@@ -169,7 +173,8 @@ void brotFlow(BrotParams desc) {
 						tmpdata[bi][bj] = mandel.buddha_data[bi][bj];
 					}
 				}
-				std.file.write(workdir ~ "/" ~ (desc.buddha == BuddhaState.buddha ? "" : "anti") ~ "buddha_" ~ desc.filename ~ ".tmp", tmpdata.cerealise);
+				std.file.write(workdir ~ "/" ~ 
+					(desc.buddha == BuddhaState.buddha ? "" : "anti") ~ "buddha_" ~ desc.filename ~ ".tmp", tmpdata.cerealise);
 			}
 			write ("! ");
 		}
@@ -224,6 +229,8 @@ void brotFlow(BrotParams desc) {
 			writeln("\nSaving: " ~ workdir ~ "/antibuddha_" ~ desc.filename ~ ".png");
 			savePNG(img, workdir ~ "/antibuddha_" ~ desc.filename ~ ".png");
 		}
+
+		clearBuddhaData();
 	}
 
 	writeln("--------------------\n");
@@ -272,10 +279,11 @@ BrotParams createBrotDesc(JSONValue s) {
 
 	if ("dwell" in s && s["dwell"].integer) ret.dwell = to!int(s["dwell"].integer);
 	if ("palette" in s && s["palette"].integer >= 0) ret.palette = to!int(s["palette"].integer);
+	if ("paletteOffset" in s) ret.paletteOffset = to!float(s["paletteOffset"].floating);
 
 	if ("multibrotExp" in s) ret.multibrotExp = s["multibrotExp"].floating;
 
-	if ("type" in s) ret.type = to!FType(s["dwell"].str);
+	if ("type" in s) ret.type = to!FType(s["type"].str);
 	if ("colorfunc" in s) ret.colorfunc = to!ColorFunc(s["colorfunc"].str);
 
 	if ("buddha" in s && s["buddha"].boolean) {
@@ -326,7 +334,7 @@ void generateAnimateSequence(ref BrotParams[] queue, JSONValue animate) {
 		ret.dwell = cast(int)exp( log(from.dwell) + deltaDwell * i);
 		ret.palette = cast(int)exp( log(from.palette) + deltaPalette * i);
 
-		ret.multibrotExp = from.multibrotExp + floor(deltaExp * i);
+		ret.multibrotExp = from.multibrotExp + (deltaExp * i);
 
 		ret.type = from.type;
 		ret.colorfunc = from.colorfunc;
@@ -345,6 +353,11 @@ void generateChunksSequence(ref BrotParams[] queue, JSONValue source) {
 	const string fpath = "CHUNKED=" ~ to!string(chunks) ~ "_" ~ s.filename ~ "/";
 
 	if (!(workdir ~ "/" ~ fpath).exists) (workdir ~ "/" ~ fpath).mkdir;
+
+	if (s.buddha != BuddhaState.none) {
+		if (!(workdir ~ "/" ~ to!string(s.buddha) ~ "_" ~ fpath).exists) 
+			(workdir ~ "/" ~ to!string(s.buddha) ~ "_" ~ fpath).mkdir;
+	}
 
 	const int w = cast(int)( s.width / to!double(chunks) );
 	const int h = cast(int)( s.height / to!double(chunks) );

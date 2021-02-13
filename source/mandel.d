@@ -20,7 +20,7 @@ import dlib.image.hsv;
 // import std.complex;
 
 const real logBase = 1.0 / log(2.0);
-const real logHalfBase = log(0.5)*logBase;
+// const real logHalfBase = log(0.5)*logBase;
 
 alias Complex = Tuple!(real, real);
 alias Coord = Tuple!(int, int);
@@ -48,6 +48,7 @@ shared real radius = 2.0;
 
 shared BuddhaState buddha = BuddhaState.none;
 shared int paletteSize = 20;
+shared float paletteOffset = 0.0;
 
 shared FType type;
 shared ColorFunc colorfunc;
@@ -114,11 +115,18 @@ void setMultibrotBase(float value = 2.0) {
   multibrotExp = value;
 }
 
-void setPaletteSize(int psz = 0) {
+void setPaletteSize(int psz = 0, float poff = 0.0) {
   if (psz)
     paletteSize = psz;
   else 
     paletteSize = max_i;
+  
+  paletteOffset = poff;
+}
+
+void clearBuddhaData() {
+  for(int i = 0; i < buddha_data.length; i++)
+    buddha_data[i][] = 0;
 }
 
 // calculators
