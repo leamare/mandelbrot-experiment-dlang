@@ -85,6 +85,32 @@ const Color4f[] seashore_palette = [
   Color4f(0.0198, 0.4563, 0.6839),
   Color4f(0.5385, 0.8259, 0.8177)
 ];
+
+const Color4f[] fire_palette = [
+  Color4f(0, 0, 0),
+  Color4f(1, 0, 0),
+  Color4f(1, 1, 0),
+  Color4f(1, 1, 1),
+  Color4f(1, 1, 0),
+  Color4f(1, 0, 0)
+];
+
+const Color4f[] oceanid_palette = [
+  Color4f(0, 0, 0),
+  Color4f(0, 0, 1),
+  Color4f(0, 1, 1),
+  Color4f(1, 1, 1),
+  Color4f(0, 1, 1),
+  Color4f(0, 0, 1)
+];
+
+const Color4f[] cnfsso_palette = [
+  RGBtoColor4f(244, 241, 222),
+  RGBtoColor4f(224, 122, 95),
+  RGBtoColor4f(61, 64, 91),
+  RGBtoColor4f(129, 178, 154),
+  RGBtoColor4f(242, 204, 143)
+];
 // preset functions
 
 void initArr(int w, int h) {
@@ -278,6 +304,10 @@ Color4f pixelcolor(int iter, double iter_d) {
       palette = ultrafrac_palette.dup;
     else if (colorfunc == ColorFunc.seashore)
       palette = seashore_palette.dup;
+    else if (colorfunc == ColorFunc.fire)
+      palette = fire_palette.dup;
+    else if (colorfunc == ColorFunc.oceanid)
+      palette = oceanid_palette.dup;
     else
       palette = ultrafrac_palette.dup;
 
