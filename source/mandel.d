@@ -406,7 +406,7 @@ Coord convertPointToPixel(real Cr, real Ci, int w, int h) {
   const auto p = radius*2/min(w, h);
 
   pZi = cast(int)( round( (Cr + origin[0] + radius*(1 + di))/p ) );
-  pZr = cast(int)( round( (-Ci - origin[1] + radius*(1 + dr))/p ) );
+  pZr = cast(int)( round( h-(Ci - origin[1] + radius*(1 + dr))/p ) );
 
 
   return Coord(pZi, pZr);
@@ -434,6 +434,7 @@ Complex convertPixelToPoint(int pZr, int pZi, int w, int h) {
 }
 
 void updateMaxBI() {
+  max_bi = 0;
   foreach (k, v; buddha_data) {
     foreach (key, value; v) {
       if (max_bi < value) max_bi = value;

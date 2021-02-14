@@ -89,6 +89,9 @@ Example of a JSON file with one fully described job:
     // dwell and palette size
     "dwell": 2500,
     "palette": 350,
+    // palette offset, float 0-1, percentage tby which palette should be shifted
+    // only works with gradient-based palettes
+    "paletteOffset": 0.5,
     // type: string with value "mandelbrot", "multibrot" or "ship"
     "type": "mandelbrot",
     // multibrot power
