@@ -279,7 +279,7 @@ Iters iterate(int pZi, int pZr, int w, int h) {
       Zr = Zr_temp;
       
       if (buddha)
-        iter_history[iter] = Complex(Zi, Zr);
+        iter_history[iter] = Complex(Zr, Zi);
     }
   } else {
     for (iter = 0; Zr*Zr + Zi*Zi <= (1 << 16) && iter < max_i; iter++) {
