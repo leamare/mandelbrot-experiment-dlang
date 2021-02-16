@@ -2,7 +2,7 @@
 
 A test dlang app that generates image of Mandelbrot set of a given size and given section of coordinates.
 
-Details blog: TBD
+Details in blog with demos and stuff: [English](https://medium.com/@leamare/experiment-with-mandelbrot-set-and-d-language-fdda4606ce9b) [Russian](https://log.ileamare.ru/2021/02/d.html)
 
 Buddhabrot is calculated using naive method.
 
