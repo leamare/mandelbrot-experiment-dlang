@@ -303,10 +303,16 @@ BrotParams createBrotDesc(JSONValue s) {
 
 void generateAnimateSequence(ref BrotParams[] queue, JSONValue animate) {
 	const int frames = to!int(animate["animate"].integer);
+	const int skip = "skip" in animate ? to!int(animate["skip"].integer) : 0;
 	const BrotParams from = createBrotDesc(animate["from"]);
 	const BrotParams endp = createBrotDesc(animate["to"]);
 	//const string fpath = from.filename ~ "++" ~ endp.filename ~ "_FRAMES=" ~ to!string(frames) ~ "/";
-	const string fpath = "animate_FRAMES=" ~ to!string(frames) ~ "_X0=" ~ format!"%.17g"(from.originX) ~ "_Y0=" ~ 
+	const int w = from.width;
+	const int h = from.height;
+
+	const string fpath = "animate_FRAMES=" ~ to!string(frames) ~ 
+		"_W=" ~ to!string(w) ~ "_H=" ~ to!string(h) ~
+		"_X0=" ~ format!"%.17g"(from.originX) ~ "_Y0=" ~ 
 		format!"%.17g"(from.originY) ~ "_Rn=" ~ format!"%.17g"(endp.radius) ~ "/";
 
 	if (!(workdir ~ "/" ~ fpath).exists) (workdir ~ "/" ~ fpath).mkdir;
@@ -319,10 +325,9 @@ void generateAnimateSequence(ref BrotParams[] queue, JSONValue animate) {
 		log(from.palette ? from.palette : from.dwell) ) / to!double(frames);
 	const float deltaExp = (endp.multibrotExp - from.multibrotExp) / to!double(frames);
 
-	const int w = from.width;
-	const int h = from.height;
-
 	for(int i=0; i <= frames; i++) {
+		if (i < skip) continue;
+		
 		auto ret = BrotParams();
 
 		ret.width = w;
