@@ -8,9 +8,6 @@ import std.file;
 import std.math;
 import std.json;
 
-//import dlib.image;
-// import decimal;
-
 import mandel;
 import flow;
 

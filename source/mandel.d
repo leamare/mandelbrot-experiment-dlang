@@ -11,7 +11,7 @@ import core.atomic;
 import dlib.image.color;
 import dlib.image.hsv;
 
-// import decimal;
+import fdecimal;
 
 // I don't really want to use it but I won't be able to calculate 
 // negative multibrots otherwise so yes, it's only used in ONE specific place
@@ -22,13 +22,13 @@ import dlib.image.hsv;
 const real logBase = 1.0 / log(2.0);
 // const real logHalfBase = log(0.5)*logBase;
 
-alias Complex = Tuple!(real, real);
+alias Complex = Tuple!(fdecimal, fdecimal);
 alias Coord = Tuple!(int, int);
 
 struct Iters { 
   int i; 
-  double d; 
-  this(int iv, double dv) { 
+  fdecimal d; 
+  this(int iv, fdecimal dv) { 
     this.i = iv; 
     this.d = dv; 
   }
@@ -57,7 +57,7 @@ shared int max_bi = 1;
 shared int min_bi = 20;
 
 shared Complex origin = Complex(0.5, 0.0);
-shared real radius = 2.0;
+shared fdecimal radius = 2.0;
 
 shared BuddhaState buddha = BuddhaState.none;
 shared int paletteSize = 20;
@@ -159,7 +159,7 @@ void setIter(int i) {
   paletteSize = cast(int)(i*0.3);
 }
 
-void setOrigin(real centerX, real centerY, real newRadius) {
+void setOrigin(fdecimal centerX, fdecimal centerY, fdecimal newRadius) {
   origin[0] = -centerX;
   origin[1] = centerY;
   // origin = Complex(-centerX, centerY);
@@ -206,29 +206,13 @@ Iters iterate(int pZi, int pZr, int w, int h) {
   const real Cr = convertedPoint[0];
   const real Ci = convertedPoint[1];
 
-	real Zr = 0;
-	real Zi = 0;
+	fdecimal Zr = 0;
+	fdecimal Zi = 0;
 	int iter;
-	real Zr_temp = 0;
+	fdecimal Zr_temp = 0;
 
   if (type == FType.multibrot && multibrotExp != 2.0) {
     real r;
-
-    // using std.complex it would be easier
-    // but it wouldn't be interesting enough
-    // here's the code
-    //
-    // auto Zn = complex(Zr, Zi);
-
-    // for (iter = 0; Zr*Zr + Zi*Zi <= (1 << 16) && iter < max_i; iter++) {
-    //   Zn = pow(Zn, multibrotExp);
-    //   Zr = Zn.re + Cr;
-    //   Zi = Zn.im + Ci;
-    //   Zn = complex(Zr, Zi);
-
-    //   if (buddha)
-    //     iter_history[iter] = Complex(Zr, Zi);
-    // }
 
     if (multibrotExp > 0) {
       for (iter = 0; Zr*Zr + Zi*Zi <= (1 << 16) && iter < max_i; iter++) {
@@ -390,15 +374,15 @@ Color4f pixelcolor(int iter, double iter_d) {
   }
 }
 
-Coord convertPointToPixel(real Cr, real Ci, int w, int h) {
+Coord convertPointToPixel(fdecimal Cr, fdecimal Ci, int w, int h) {
   int pZi, pZr;
-  real di, dr;
+  fdecimal di, dr;
 
   if (w == h) {
     di = 0;
     dr = 0;
   } else {
-    real diff = cast(real)( max(w, h) - min(w, h) )/min(w, h);
+    fdecimal diff = cast(fdecimal)( max(w, h) - min(w, h) )/min(w, h);
     di = w > h ? diff : 0;
     dr = w > h ? 0 : diff;
   }
@@ -413,22 +397,22 @@ Coord convertPointToPixel(real Cr, real Ci, int w, int h) {
 }
 
 Complex convertPixelToPoint(int pZr, int pZi, int w, int h) {
-  real Cr, Ci;
-  real di, dr;
+  fdecimal Cr, Ci;
+  fdecimal di, dr;
 
   if (w == h) {
     di = 0;
     dr = 0;
   } else {
-    real diff = cast(real)( max(w, h) - min(w, h) )/min(w, h);
+    fdecimal diff = cast(fdecimal)( max(w, h) - min(w, h) )/min(w, h);
     di = w > h ? diff : 0;
     dr = w > h ? 0 : diff;
   }
 
   const auto p = radius*2/min(w, h);
 
-  Cr =  (to!real(pZi)*p) - (origin[0] + radius*(1 + di));
-  Ci = -(to!real(pZr)*p) + (origin[1] + radius*(1 + dr));
+  Cr =  (to!fdecimal(pZi)*p) - (origin[0] + radius*(1 + di));
+  Ci = -(to!fdecimal(pZr)*p) + (origin[1] + radius*(1 + dr));
 
   return Complex(Cr, Ci);
 }
