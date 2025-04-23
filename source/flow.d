@@ -68,7 +68,7 @@ void brotFlow(BrotParams desc) {
 	//if (desc.palette) 
 	mandel.setPaletteSize(desc.palette, desc.paletteOffset);
 
-  const int wfactor = to!int( floor(to!double(desc.width) / 100.0) );
+  const int wfactor = desc.width > 100 ? to!int( floor(to!double(desc.width) / 100.0) ) : 1;
 
   // CLI description
 

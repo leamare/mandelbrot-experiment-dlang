@@ -5,7 +5,7 @@
 	"copyright": "Copyright © 2021, Leamare",
 	"dependencies": {
 		"cerealed": "~>0.6.11",
-		"dlib": "~>0.20.0"
+		"dlib": "~>1.3.1"
 	},
 	"description": "Mandelbrot set D experiment",
 	"license": "GPL-3.0",
