@@ -56,6 +56,46 @@ struct RenderParams {
     BuddhaMode buddha = BuddhaMode.none;
     
     string forcePrecision = "";
+
+    int x_px_offset = 0;
+    int y_px_offset = 0;
+
+    void applyPixelOffset() {
+        if (x_px_offset == 0 && y_px_offset == 0) {
+            return;
+        }
+
+        double minDim = min(cast(double)width, cast(double)height);
+        double pixelSpacing = (radius * 2.0) / minDim;
+
+        double offsetX = x_px_offset * pixelSpacing;
+        double offsetY = -y_px_offset * pixelSpacing;
+
+        originX += offsetX;
+        originY += offsetY;
+
+        if (originXStr.length > 0) {
+            try {
+                real currentX = to!real(originXStr);
+                originXStr = format!"%.20g"(currentX + offsetX);
+            } catch (Exception) {
+                originXStr = format!"%.20g"(originX);
+            }
+        } else {
+            originXStr = format!"%.20g"(originX);
+        }
+        
+        if (originYStr.length > 0) {
+            try {
+                real currentY = to!real(originYStr);
+                originYStr = format!"%.20g"(currentY + offsetY);
+            } catch (Exception) {
+                originYStr = format!"%.20g"(originY);
+            }
+        } else {
+            originYStr = format!"%.20g"(originY);
+        }
+    }
         
     PrecisionMode precisionMode() const {
         if (forcePrecision.length > 0) {
