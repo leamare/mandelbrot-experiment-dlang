@@ -92,7 +92,7 @@ Example of a JSON file with one fully described job:
     // palette offset, float 0-1, percentage tby which palette should be shifted
     // only works with gradient-based palettes
     "paletteOffset": 0.5,
-    // type: string with value "mandelbrot", "multibrot" or "ship"
+    // type: string with value "mandelbrot", "multibrot", "mandelbar" or "ship"
     "type": "mandelbrot",
     // multibrot power
     "multibrotExp": 2.0,
@@ -103,6 +103,41 @@ Example of a JSON file with one fully described job:
     "antibuddha": false,
     // filename, .png is appended automatically, as well as working directory
     "filename": "cool_file_name",
+    
+    // Precision control parameters
+    // precision: string, controls precision mode
+    //   Values: "auto", "double", "bigfloat", "gmp", "bigint", "standard", "arbitrary"
+    //   "auto" (default): Automatically selects based on zoom depth
+    //   "double" or "standard": Standard double precision (~15 decimal digits) - FASTEST
+    //   "bigfloat": Double-double precision (~31 decimal digits) - FAST
+    //   "gmp" or "arbitrary": GMP arbitrary precision (unlimited) - MEDIUM speed
+    //   "bigint": Legacy BigInt mode (currently an alias for GMP)
+    "precision": "auto",
+    
+    // arbitrary_precision_method: string, selects which arbitrary precision to use in auto mode
+    //   Only used when precision is "auto" and very high precision (>100 digits) is needed
+    //   Values: "gmp" (default, faster) or "bigint" (legacy alias for GMP)
+    "arbitrary_precision_method": "gmp",
+    
+    // Pixel offset parameters (shift viewport center)
+    // x_px_offset: integer, number of pixels to offset center horizontally
+    //   Positive values shift center right (point at +x_px_offset becomes new center)
+    // y_px_offset: integer, number of pixels to offset center vertically
+    //   Positive values shift center down (point at +y_px_offset becomes new center)
+    //   Note: Origin coordinates in filename will reflect the adjusted center
+    "x_px_offset": 0,
+    "y_px_offset": 0,
+    
+    // Palette customization
+    // paletteFile or palette_file: string, filename of external palette JSON file
+    //   Palette files should be placed in the "palettes/" directory
+    //   Supports RGB (0-255) or fraction (0-1) color definitions
+    //   Optional "position" field (0-1) for non-uniform color distribution
+    //   Example: "example.json" or "my_palette.json"
+    "paletteFile": "",
+    // palette_reverse: boolean, reverses the color palette order
+    //   Works with both external palettes and built-in palettes (ultrafrac, hsv, gray, etc.)
+    "palette_reverse": false,
   },
 ]
 ```
