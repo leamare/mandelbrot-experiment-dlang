@@ -266,10 +266,14 @@ void brotFlow(RenderParams desc) {
 
         writeln("Auto-dwell: estimated ", desc.dwell, " iterations for this zoom depth");
     }
-        
+    
     if (desc.x_px_offset != 0 || desc.y_px_offset != 0) {
         desc.applyPixelOffset();
         writeln("Applied pixel offset: x=", desc.x_px_offset, ", y=", desc.y_px_offset);
+
+        if (desc.filename.length == 0 || desc.filename == desc.generateFileName()) {
+            desc.filename = desc.generateFileName();
+        }
     }
         
     auto cfg = desc.toRenderConfig();
