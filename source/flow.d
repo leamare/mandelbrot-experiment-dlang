@@ -18,10 +18,18 @@ import dlib.image;
 import mandel;
 import gmp_arb;
 import perturbation_bla;
+import multidouble : calculateNumDoubles;
 
 // =============================================================================
 // Module-level Configuration
 // =============================================================================
+
+enum uint PRECISION_THRESHOLD_DOUBLE = 15;
+enum uint PRECISION_THRESHOLD_BIGFLOAT = 50;
+enum uint PRECISION_THRESHOLD_MULTIDOUBLE = 240;
+enum uint PRECISION_THRESHOLD_GMP = 241;
+enum uint MULTIDOUBLE_MIN_DOUBLES = 2;
+enum uint MULTIDOUBLE_MAX_DOUBLES = 12;
 
 string workdir = "out";
 int saveProgress = 0;
@@ -44,6 +52,8 @@ struct RenderParams {
     real radius = 2.0;
         
     int palette = 0;
+    bool paletteReverse = false;
+    string paletteFile = "";
     float paletteOffset = 0.0;
     uint dwell = 100;
     bool autoDwell = false;
@@ -56,6 +66,7 @@ struct RenderParams {
     BuddhaMode buddha = BuddhaMode.none;
     
     string forcePrecision = "";
+    string arbitraryPrecisionMethod = "";
 
     int x_px_offset = 0;
     int y_px_offset = 0;
@@ -345,35 +356,124 @@ private void iterateSimple(ref IterResult[][] iters, const ref RenderConfig cfg,
     }
 }
 
-private void iterateGMPMode(ref IterResult[][] iters, const ref RenderConfig cfg,
-                                                        const ref RenderParams desc, int wfactor) {
+private void iterateGMPMode(ref IterResult[][] iters, const ref RenderConfig cfg, const ref RenderParams desc, int wfactor) {
+    import precision_unified : PrecisionMethod, parsePrecisionMethod, selectPrecisionMethod;
     import gmp_arb : GMPFloat;
     import std.complex;
     import core.atomic;
-        
-    uint digits;
-    if (desc.radiusStr.length > 0) {
-        real radius = desc.radius;
-        digits = RenderConfig.calculateOptimalPrecision(radius, desc.width, desc.height);
-    } else {
-        auto coordLen = max(desc.originXStr.length, desc.originYStr.length);
-        digits = cast(uint)max(50, coordLen + 20);
-    }
-        
-    GMPFloat.setPrecisionDigits(digits);
     
-    writeln("Using Perturbation+BLA for deep zoom");
-    writeln("Reference orbit precision: ", digits, " digits");
+    PrecisionMethod precisionMethod = PrecisionMethod.auto_;
+    
+    if (desc.arbitraryPrecisionMethod.length > 0) {
+        precisionMethod = parsePrecisionMethod(desc.arbitraryPrecisionMethod);
+        writeln("Using forced precision method: ", desc.arbitraryPrecisionMethod);
+        if (precisionMethod == PrecisionMethod.bigint) {
+            precisionMethod = PrecisionMethod.gmp;
+            writeln("Note: bigint precision method uses GMP implementation");
+        }
+    } else if (desc.forcePrecision.length > 0) {
+        string mode = desc.forcePrecision.toLower().strip();
+        if (mode == "bigfloat" || mode == "dd" || mode == "doubledouble" || mode == "bigfixed") {
+            precisionMethod = PrecisionMethod.bigfloat;
+        } else if (mode == "gmp" || mode == "arbitrary") {
+            precisionMethod = PrecisionMethod.gmp;
+        } else if (mode == "double" || mode == "standard") {
+            precisionMethod = PrecisionMethod.double_;
+        } else if (mode == "bigint") {
+            precisionMethod = PrecisionMethod.gmp;
+            writeln("Note: bigint precision method uses GMP implementation");
+        } else {
+            precisionMethod = parsePrecisionMethod(mode);
+            if (precisionMethod == PrecisionMethod.bigint) {
+                precisionMethod = PrecisionMethod.gmp;
+                writeln("Note: bigint precision method uses GMP implementation");
+            }
+        }
+    }
+    
+    if (precisionMethod == PrecisionMethod.auto_) {
+        uint digits;
+        if (desc.radiusStr.length > 0) {
+            real radius = desc.radius;
+            digits = RenderConfig.calculateOptimalPrecision(radius, desc.width, desc.height);
+        } else {
+            auto coordLen = max(desc.originXStr.length, desc.originYStr.length);
+            digits = cast(uint)max(50, coordLen + 20);
+        }
+        
+        PrecisionMethod arbitraryMethod = PrecisionMethod.gmp;
+        if (desc.arbitraryPrecisionMethod.length > 0) {
+            auto arbMethod = parsePrecisionMethod(desc.arbitraryPrecisionMethod);
+            if (arbMethod == PrecisionMethod.bigint || arbMethod == PrecisionMethod.gmp) {
+                arbitraryMethod = arbMethod;
+            }
+        }
+        
+        precisionMethod = selectPrecisionMethod(digits, arbitraryMethod);
+        
+        string methodName = 
+            precisionMethod == PrecisionMethod.double_ ? "double" :
+            precisionMethod == PrecisionMethod.bigfloat ? "bigfloat" :
+            precisionMethod == PrecisionMethod.multidouble ? "multidouble" :
+            precisionMethod == PrecisionMethod.gmp ? "gmp" :
+            precisionMethod == PrecisionMethod.bigint ? "bigint" : "auto";
+        
+        if (precisionMethod == PrecisionMethod.multidouble) {
+            uint numDoubles = calculateNumDoubles(digits);
+            writeln("Auto-selected precision method: ", methodName, " (", numDoubles, " doubles, based on ", digits, " required digits)");
+        } else {
+            writeln("Auto-selected precision method: ", methodName, " (based on ", digits, " required digits)");
+        }
+        if (digits > 100) {
+            writeln("  Using ", arbitraryMethod == PrecisionMethod.gmp ? "GMP" : "bigint", 
+                    " for very high precision");
+        }
+    }
+    
+    if (precisionMethod == PrecisionMethod.gmp || precisionMethod == PrecisionMethod.bigint) {
+        uint digits;
+        if (desc.radiusStr.length > 0) {
+            real radius = desc.radius;
+            digits = RenderConfig.calculateOptimalPrecision(radius, desc.width, desc.height);
+        } else {
+            auto coordLen = max(desc.originXStr.length, desc.originYStr.length);
+            digits = cast(uint)max(50, coordLen + 20);
+        }
+        GMPFloat.setPrecisionDigits(digits);
+        writeln("Using Perturbation+BLA for deep zoom");
+        writeln("Reference orbit precision: ", digits, " digits");
+    } else if (precisionMethod == PrecisionMethod.multidouble) {
+        uint digits;
+        if (desc.radiusStr.length > 0) {
+            real radius = desc.radius;
+            digits = RenderConfig.calculateOptimalPrecision(radius, desc.width, desc.height);
+        } else {
+            auto coordLen = max(desc.originXStr.length, desc.originYStr.length);
+            digits = cast(uint)max(50, coordLen + 20);
+        }
+        uint numDoubles = calculateNumDoubles(digits);
+        writeln("Using Perturbation+BLA with multidouble precision (", numDoubles, " doubles)");
+        writeln("Reference orbit precision: ", digits, " digits");
+    } else {
+        writeln("Using Perturbation+BLA with ", 
+            precisionMethod == PrecisionMethod.bigfloat ? "bigfloat" : "double", " precision");
+    }
     
     writeln("Computing reference orbit at center:");
     writeln("  X: ", desc.originXStr);
     writeln("  Y: ", desc.originYStr);
     writeln("  Iterations: ", desc.dwell);
     stdout.flush();
-        
+    
     auto refOrbit = computeReferenceOrbit(
-        desc.originXStr, desc.originYStr, desc.dwell
+        desc.originXStr, desc.originYStr, desc.dwell, precisionMethod
     );
+
+    writeln("Reference orbit computed with precision method: ", 
+        precisionMethod == PrecisionMethod.double_ ? "double" :
+        precisionMethod == PrecisionMethod.bigfloat ? "bigfloat" :
+        precisionMethod == PrecisionMethod.multidouble ? "multidouble" :
+        precisionMethod == PrecisionMethod.gmp ? "gmp" : "auto");
         
     if (refOrbit.zRef.length < 2) {
         writeln("ERROR: Reference orbit too short, falling back to direct GMP");
@@ -384,14 +484,40 @@ private void iterateGMPMode(ref IterResult[][] iters, const ref RenderConfig cfg
     auto blaTable = buildBLATable(refOrbit);
     writeln("Starting perturbation iteration with BLA...");
         
-    import gmp_arb : GMPFloat, GMPPixelConverter;
-        
-    auto pixelConverter = GMPPixelConverter(
-        desc.width, desc.height,
-        desc.originXStr, desc.originYStr, desc.radiusStr
-    );
-        
-    auto cRefGMP = GMPComplex(desc.originXStr, desc.originYStr);
+    import gmp_arb : GMPFloat, GMPPixelConverter, GMPComplex;
+    import multidouble : MultiDoublePixelConverter, MultiDoubleComplex;
+    
+    GMPComplex cRefGMP;
+    GMPPixelConverter pixelConverterGMP;
+    MultiDoublePixelConverter pixelConverterMD;
+    MultiDoubleComplex cRefMD;
+    bool usingMultiDoubleConverter = false;
+    
+    if (precisionMethod == PrecisionMethod.multidouble) {
+        uint digits;
+        if (desc.radiusStr.length > 0) {
+            real radius = desc.radius;
+            digits = RenderConfig.calculateOptimalPrecision(radius, desc.width, desc.height);
+        } else {
+            auto coordLen = max(desc.originXStr.length, desc.originYStr.length);
+            digits = cast(uint)max(50, coordLen + 20);
+        }
+        uint numDoubles = calculateNumDoubles(digits);
+        pixelConverterMD = MultiDoublePixelConverter(
+            desc.width, desc.height,
+            desc.originXStr, desc.originYStr, desc.radiusStr,
+            numDoubles
+        );
+        cRefMD = MultiDoubleComplex(numDoubles, desc.originXStr, desc.originYStr);
+        usingMultiDoubleConverter = true;
+    } else {
+        pixelConverterGMP = GMPPixelConverter(
+            desc.width, desc.height,
+            desc.originXStr, desc.originYStr, desc.radiusStr
+        );
+        cRefGMP = GMPComplex(desc.originXStr, desc.originYStr);
+        usingMultiDoubleConverter = false;
+    }
         
     double w = cast(double)desc.width;
     double h = cast(double)desc.height;
@@ -406,38 +532,281 @@ private void iterateGMPMode(ref IterResult[][] iters, const ref RenderConfig cfg
     shared int processedPixels = 0;
     int totalPixels = desc.width * desc.height;
     int progressInterval = max(1, totalPixels / 40);
-    int lastPercent = -1;
+    shared int lastPercent = -1;
     
     write("Progress: ");
     stdout.flush();
+    
+    const Complex!double[] zRefArray = refOrbit.zRef.dup;
+    const BLAEntry[] blaEntriesArray = blaTable.entries.dup;
+    const double escapeRadius2 = refOrbit.escapeRadius2;
+    
+    MultiDoubleComplex[] zRefArrayMD;
+    uint numDoublesForMD = 0;
+    if (precisionMethod == PrecisionMethod.multidouble) {
+        import perturbation_bla_hp : computeReferenceOrbitMultiDouble;
+        if (desc.radiusStr.length > 0) {
+            real radius = desc.radius;
+            numDoublesForMD = calculateNumDoubles(RenderConfig.calculateOptimalPrecision(radius, desc.width, desc.height));
+        } else {
+            auto coordLen = max(desc.originXStr.length, desc.originYStr.length);
+            numDoublesForMD = calculateNumDoubles(cast(uint)max(50, coordLen + 20));
+        }
+        writeln("Computing MultiDouble reference orbit (", numDoublesForMD, " doubles) for first pass...");
+        zRefArrayMD = computeReferenceOrbitMultiDouble(
+            desc.originXStr, desc.originYStr, desc.dwell, numDoublesForMD
+        );
+        writeln("MultiDouble reference orbit computed: ", zRefArrayMD.length, " points");
+    }
         
     auto wRange = iota(0, desc.width);
     foreach (i; parallel(wRange)) {
         for (int j = 0; j < desc.height; j++) {
-            auto cPixelGMP = pixelConverter.pixelToComplex(i, j);
-            auto delta0GMP = cPixelGMP - cRefGMP;
-            auto delta0 = Complex!double(
-                delta0GMP.re.toDouble(),
-                delta0GMP.im.toDouble()
-            );
+            Complex!double delta0;
+            double delta0LogScale = 0.0;
+            bool useScaledDelta = false;
             
-            auto perturbResult = perturbIterateBLA(
-                refOrbit, blaTable, delta0, desc.dwell
-            );
+            if (usingMultiDoubleConverter) {
+                auto pixelC = pixelConverterMD.pixelToComplex(i, j);
+                auto delta0MD = pixelC - cRefMD;
+                double delta0Real = delta0MD.re.toDouble();
+                double delta0Imag = delta0MD.im.toDouble();
+                
+                double delta0Mag2 = delta0Real * delta0Real + delta0Imag * delta0Imag;
+                double radius;
+                try {
+                    radius = to!double(desc.radiusStr);
+                } catch (Exception) {
+                    radius = 0;
+                }
+                bool isActuallyZero = delta0MD.re.isZero() && delta0MD.im.isZero();
+                if ((radius <= 1e-300 || radius == 0) || (delta0Real == 0.0 && delta0Imag == 0.0 && !isActuallyZero)) {
+                    // Delta is too small - use scaled representation
+                    useScaledDelta = true;
+                    double relX = (cast(double)i / minDim) * 2.0 - (1.0 + di);
+                    double relY = -((cast(double)j / minDim) * 2.0 - (1.0 + dr));
+                    delta0 = Complex!double(relX * 2.0, relY * 2.0);  // Normalized delta
+
+                    auto ePos = desc.radiusStr.countUntil!(c => c == 'e' || c == 'E')();
+                    if (ePos >= 0) {
+                        delta0LogScale = to!double(desc.radiusStr[ePos + 1 .. $]);
+                    } else {
+                        delta0LogScale = std.math.log10(cast(double)desc.radius);
+                    }
+                } else {
+                    delta0 = Complex!double(delta0Real, delta0Imag);
+                }
+            } else {
+                auto pixelC = pixelConverterGMP.pixelToComplex(i, j);
+                auto delta0GMP = pixelC - cRefGMP;
+                double delta0Real = delta0GMP.re.toDouble();
+                double delta0Imag = delta0GMP.im.toDouble();
+                
+                double delta0Mag2 = delta0Real * delta0Real + delta0Imag * delta0Imag;
+                double radius;
+                try {
+                    radius = to!double(desc.radiusStr);
+                } catch (Exception) {
+                    radius = 0;
+                }
+                // Only use scaled delta if radius is unrepresentable OR delta0 rounds to zero
+                if ((radius <= 1e-300 || radius == 0) || (delta0Real == 0.0 && delta0Imag == 0.0)) {
+                    // Delta is too small - use scaled representation
+                    useScaledDelta = true;
+                    double relX = (cast(double)i / minDim) * 2.0 - (1.0 + di);
+                    double relY = -((cast(double)j / minDim) * 2.0 - (1.0 + dr));
+                    delta0 = Complex!double(relX * 2.0, relY * 2.0);
+
+                    auto ePos = desc.radiusStr.countUntil!(c => c == 'e' || c == 'E')();
+                    if (ePos >= 0) {
+                        delta0LogScale = to!double(desc.radiusStr[ePos + 1 .. $]);
+                    } else {
+                        delta0LogScale = std.math.log10(cast(double)desc.radius);
+                    }
+                } else {
+                    delta0 = Complex!double(delta0Real, delta0Imag);
+                }
+            }
+            
+            PerturbResult perturbResult;
+            if (precisionMethod == PrecisionMethod.multidouble && zRefArrayMD.length > 0) {
+                import perturbation_bla_hp : perturbIterateBLAMultiDouble;
+
+                MultiDoubleComplex delta0MD;
+                if (usingMultiDoubleConverter) {
+                    auto pixelC = pixelConverterMD.pixelToComplex(i, j);
+                    delta0MD = pixelC - cRefMD;
+                } else {
+                    delta0MD = MultiDoubleComplex(numDoublesForMD, delta0.re, delta0.im);
+                }
+                
+                perturbResult = perturbIterateBLAMultiDouble(
+                    zRefArrayMD, escapeRadius2, blaEntriesArray, 
+                    delta0MD, desc.dwell, numDoublesForMD
+                );
+            } else if (useScaledDelta) {
+                perturbResult = perturbIterateBLAScaledArrays(
+                    zRefArray, escapeRadius2, blaEntriesArray, 
+                    delta0, delta0LogScale, desc.dwell,
+                    refOrbit.escaped ? refOrbit.refIterations : -1
+                );
+            } else {
+                perturbResult = perturbIterateBLAArrays(
+                    zRefArray, escapeRadius2, blaEntriesArray, delta0, desc.dwell
+                );
+            }
             
             iters[i][j] = IterResult(
                 perturbResult.iterations,
                 perturbResult.smoothed
             );
             
+            static int debugPixelCount = 0;
+            if (debugPixelCount < 10 && i < 10 && j < 10) {
+                writeln("\n[ITER DEBUG] Pixel [", i, ",", j, "]: iterations=", perturbResult.iterations, 
+                        ", smoothed=", perturbResult.smoothed, ", maxIter=", desc.dwell);
+                debugPixelCount++;
+            }
+            
             int current = atomicOp!"+="(processedPixels, 1);
             if (current % progressInterval == 0 || current == totalPixels) {
-                int percent = (current * 100) / totalPixels;
-                if (percent != lastPercent) {
-                    write(percent, "% ");
-                    stdout.flush();
-                    lastPercent = percent;
+                long percent = (cast(long)current * 100L) / cast(long)totalPixels;
+                int oldPercent = atomicLoad(lastPercent);
+                if (percent != oldPercent && percent >= 0 && percent <= 100) {
+                    atomicStore(lastPercent, cast(int)percent);
+                    if (atomicLoad(lastPercent) == cast(int)percent) {
+                        write(cast(int)percent, "% ");
+                        stdout.flush();
+                    }
                 }
+            }
+        }
+    }
+    writeln();
+    
+    double radius;
+    try {
+        radius = to!double(desc.radiusStr);
+    } catch (Exception) {
+        radius = desc.radius;
+    }
+    
+    bool hasNegativeExponent = desc.radiusStr.length > 0 && desc.radiusStr.indexOf("e-") >= 0;
+    bool needsSecondPass = (radius <= 1e-25 || hasNegativeExponent);
+    
+    if (needsSecondPass) {
+        writeln("Second pass: Recomputing uncertain pixels with higher precision...");
+        
+        int uncertainCount = 0;
+        foreach (i; 0 .. desc.width) {
+            for (int j = 0; j < desc.height; j++) {
+                if (iters[i][j].iterations >= cast(int)desc.dwell - 10) {
+                    uncertainCount++;
+                }
+            }
+        }
+        
+        if (uncertainCount == 0) {
+            writeln("No uncertain pixels found, skipping second pass");
+        } else {
+            writeln("Found ", uncertainCount, " uncertain pixels (", 
+                   (uncertainCount * 100) / (desc.width * desc.height), "%)");
+            
+            if (precisionMethod == PrecisionMethod.multidouble) {
+                import multidouble : MultiDoublePixelConverter, MultiDoubleComplex, calculateNumDoubles;
+                import perturbation_bla_hp : perturbIterateBLAMultiDouble;
+                uint digits = RenderConfig.calculateOptimalPrecision(radius, desc.width, desc.height);
+                uint currentDoubles = calculateNumDoubles(digits);
+                uint higherDoubles = min(currentDoubles + 2, 12u);
+                
+                if (higherDoubles > currentDoubles) {
+                    writeln("Second pass: Using ", higherDoubles, " doubles (was ", currentDoubles, ") for full MultiDouble perturbation");
+
+                    auto mdConverterHigher = MultiDoublePixelConverter(
+                        desc.width, desc.height,
+                        desc.originXStr, desc.originYStr, desc.radiusStr, higherDoubles
+                    );
+                    auto cRefMDHigher = MultiDoubleComplex(higherDoubles, refOrbit.cRef.re.toString(), refOrbit.cRef.im.toString());
+
+                    writeln("Recomputing reference orbit in ", higherDoubles, "-double precision for second pass...");
+                    import perturbation_bla_hp : computeReferenceOrbitMultiDouble;
+                    auto zRefArrayMDHigher = computeReferenceOrbitMultiDouble(
+                        desc.originXStr, desc.originYStr, desc.dwell, higherDoubles
+                    );
+                    writeln("Reference orbit recomputed: ", zRefArrayMDHigher.length, " points");
+                    
+                    int recomputed = 0;
+                    auto wRange2 = iota(0, desc.width);
+                    foreach (i; parallel(wRange2)) {
+                        for (int j = 0; j < desc.height; j++) {
+                            if (iters[i][j].iterations >= cast(int)desc.dwell - 10) {
+                                auto pixelC = mdConverterHigher.pixelToComplex(i, j);
+                                auto delta0MD = pixelC - cRefMDHigher;
+                                
+                                auto perturbResult = perturbIterateBLAMultiDouble(
+                                    zRefArrayMDHigher, escapeRadius2, blaEntriesArray, 
+                                    delta0MD, desc.dwell, higherDoubles
+                                );
+                                
+                                if (recomputed == 0) {
+                                    writeln("\n[FLOW DEBUG] Pixel [", i, ",", j, "]: iterations=", perturbResult.iterations, 
+                                            ", smoothed=", perturbResult.smoothed, 
+                                            ", glitched=", perturbResult.glitched);
+                                }
+                                
+                                iters[i][j] = IterResult(perturbResult.iterations, perturbResult.smoothed);
+                                recomputed++;
+                                if (recomputed % 100 == 0) {
+                                    write(".");
+                                    stdout.flush();
+                                }
+                            }
+                        }
+                    }
+                    writeln();
+                    writeln("Recomputed ", recomputed, " pixels with full ", higherDoubles, "-double precision perturbation");
+                } else {
+                    writeln("Already at maximum MultiDouble precision (", currentDoubles, " doubles)");
+                }
+            } else if (precisionMethod == PrecisionMethod.gmp) {
+                import gmp_arb : GMPFloat, GMPPixelConverter;
+                uint digits = RenderConfig.calculateOptimalPrecision(radius, desc.width, desc.height);
+                GMPFloat.setPrecisionDigits(digits + 50);
+                auto gmpConverter = GMPPixelConverter(
+                    desc.width, desc.height,
+                    desc.originXStr, desc.originYStr, desc.radiusStr
+                );
+                
+                int maxRecompute = min(uncertainCount, 50);
+                int recomputed = 0;
+                int skipped = 0;
+                
+                writeln("Recomputing up to ", maxRecompute, " pixels with GMP...");
+                auto wRange2 = iota(0, desc.width);
+                foreach (i; parallel(wRange2)) {
+                    for (int j = 0; j < desc.height; j++) {
+                        if (iters[i][j].iterations >= cast(int)desc.dwell - 10) {
+                            if (recomputed < maxRecompute) {
+                                auto gmpResult = iterateGMPDirect(i, j, cfg, gmpConverter);
+                                iters[i][j] = gmpResult;
+                                recomputed++;
+                                if (recomputed % 10 == 0) {
+                                    write(".");
+                                    stdout.flush();
+                                }
+                            } else {
+                                skipped++;
+                            }
+                        }
+                    }
+                }
+                writeln();
+                writeln("Recomputed ", recomputed, " pixels with GMP precision");
+                if (skipped > 0) {
+                    writeln("Skipped ", skipped, " pixels to avoid hanging");
+                }
+            } else {
+                writeln("Skipping second pass - precision method ", precisionMethod, " doesn't support second pass yet");
             }
         }
     }
@@ -716,6 +1085,12 @@ RenderParams createBrotDesc(JSONValue s) {
     } else if ("precisionMode" in s && s["precisionMode"].type == JSONType.string) {
         ret.forcePrecision = s["precisionMode"].str;
     }
+
+    if ("arbitrary_precision_method" in s && s["arbitrary_precision_method"].type == JSONType.string) {
+        ret.arbitraryPrecisionMethod = s["arbitrary_precision_method"].str;
+    } else if ("arbitraryPrecisionMethod" in s && s["arbitraryPrecisionMethod"].type == JSONType.string) {
+        ret.arbitraryPrecisionMethod = s["arbitraryPrecisionMethod"].str;
+    }
     
     if ("zoom" in s) {
         string zoomStr;
@@ -744,6 +1119,16 @@ RenderParams createBrotDesc(JSONValue s) {
     if ("dwell" in s && isNonZeroNumber(s["dwell"])) ret.dwell = getJsonInt(s["dwell"]);
     if ("palette" in s) ret.palette = getJsonInt(s["palette"]);
     if ("paletteOffset" in s) ret.paletteOffset = cast(float)getJsonNumber(s["paletteOffset"]);
+    if ("palette_reverse" in s && s["palette_reverse"].type == JSONType.true_) {
+        ret.paletteReverse = true;
+    } else if ("palette_reverse" in s && s["palette_reverse"].type == JSONType.false_) {
+        ret.paletteReverse = false;
+    }
+    if ("paletteFile" in s && s["paletteFile"].type == JSONType.string) {
+        ret.paletteFile = s["paletteFile"].str;
+    } else if ("palette_file" in s && s["palette_file"].type == JSONType.string) {
+        ret.paletteFile = s["palette_file"].str;
+    }
     
     if ("multibrotExp" in s) ret.multibrotExp = cast(float)getJsonNumber(s["multibrotExp"]);
     
