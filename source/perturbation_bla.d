@@ -23,7 +23,7 @@ import gmp_arb;
 
 /// Reference orbit computed at high precision
 struct ReferenceOrbit {
-    /// Z_ref values at each iteration
+    /// Z_ref values at each iteration (stored as double for fast access)
     Complex!double[] zRef;
     
     /// Reference point C (high precision, for exact computation)
@@ -127,7 +127,6 @@ ReferenceOrbit computeReferenceOrbit(string cRealStr, string cImagStr, uint maxI
     double zr = 0.0;
     double zi = 0.0;
     double cr, ci;
-    
     try {
         cr = result.cRef.re.toDouble();
         ci = result.cRef.im.toDouble();
@@ -161,11 +160,14 @@ ReferenceOrbit computeReferenceOrbit(string cRealStr, string cImagStr, uint maxI
             // Store as double
             result.zRef ~= Complex!double(zr, zi);
             
-            // Check escape
-            if (mag2 > escapeRadius2) {
+            // Check escape - but continue computing even after escape
+            // This is important for perturbation: we need the full reference orbit
+            // even if it escapes, so we can accurately compute pixel variations
+            if (mag2 > escapeRadius2 && !result.escaped) {
                 result.escaped = true;
                 result.refIterations = iter + 1;
-                break;
+                // Don't break - continue computing to maxIterations
+                // This ensures we have the full reference orbit for perturbation
             }
             
             // Switch to GMP if magnitude is huge or deep iteration
@@ -203,12 +205,13 @@ ReferenceOrbit computeReferenceOrbit(string cRealStr, string cImagStr, uint maxI
             }
             
             // Check escape less frequently for GMP
+            // Continue computing even after escape for full reference orbit
             if (iter % 10 == 0 || iter == maxIterations - 1) {
                 double mag2 = zGMP.magnitudeSquaredDouble();
-                if (mag2 > escapeRadius2) {
+                if (mag2 > escapeRadius2 && !result.escaped) {
                     result.escaped = true;
                     result.refIterations = iter + 1;
-                    break;
+                    // Don't break - continue to maxIterations
                 }
             }
         }
@@ -415,16 +418,20 @@ PerturbResult perturbIterateBLA(
     size_t maxRefIter = ref_.zRef.length;
     bool usingLastRef = false;  // Track if we're using the last reference point
     
+    // Now that reference orbit computation continues even after escape,
+    // we should have the full reference orbit up to maxIterations.
+    // However, if we still run out (shouldn't happen), use last point.
+    
     while (iter < maxIterations) {
         // Bounds check before accessing zRef
         if (refIter >= cast(int)maxRefIter) {
-            // Ran out of reference orbit - use last point and continue
-            if (maxRefIter > 0) {
-                refIter = cast(int)maxRefIter - 1;
-                usingLastRef = true;
-            } else {
+            // Ran out of reference orbit - shouldn't happen if computation is correct
+            if (maxRefIter == 0) {
                 break;  // No reference data at all
             }
+            // Use last point and continue
+            refIter = cast(int)maxRefIter - 1;
+            usingLastRef = true;
         }
         
         auto zRef = ref_.zRef[refIter];
