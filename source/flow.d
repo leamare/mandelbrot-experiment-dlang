@@ -68,8 +68,8 @@ struct RenderParams {
         double minDim = min(cast(double)width, cast(double)height);
         double pixelSpacing = (radius * 2.0) / minDim;
 
-        double offsetX = x_px_offset * pixelSpacing;
-        double offsetY = -y_px_offset * pixelSpacing;
+        double offsetX = -x_px_offset * pixelSpacing;
+        double offsetY = y_px_offset * pixelSpacing;
 
         originX += offsetX;
         originY += offsetY;
@@ -265,6 +265,11 @@ void brotFlow(RenderParams desc) {
         }
 
         writeln("Auto-dwell: estimated ", desc.dwell, " iterations for this zoom depth");
+    }
+        
+    if (desc.x_px_offset != 0 || desc.y_px_offset != 0) {
+        desc.applyPixelOffset();
+        writeln("Applied pixel offset: x=", desc.x_px_offset, ", y=", desc.y_px_offset);
     }
         
     auto cfg = desc.toRenderConfig();
@@ -749,6 +754,13 @@ RenderParams createBrotDesc(JSONValue s) {
     
     if ("autoDwell" in s && s["autoDwell"].type == JSONType.true_) {
         ret.autoDwell = true;
+    }
+
+    if ("x_px_offset" in s) {
+        ret.x_px_offset = getJsonInt(s["x_px_offset"]);
+    }
+    if ("y_px_offset" in s) {
+        ret.y_px_offset = getJsonInt(s["y_px_offset"]);
     }
     
     if ("filename" in s) {
