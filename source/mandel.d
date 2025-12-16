@@ -5,468 +5,573 @@ import std.math;
 import std.algorithm;
 import std.conv;
 import std.typecons;
-
-import core.atomic;
+import std.complex;
 
 import dlib.image.color;
 import dlib.image.hsv;
 
-// import decimal;
+import gmp_arb;
 
-// I don't really want to use it but I won't be able to calculate 
-// negative multibrots otherwise so yes, it's only used in ONE specific place
-// and in every other I'm doing in an old-fashioned way
-// I could've implement it myself, but I don't have any idea how to
-// import std.complex;
+// =============================================================================
+// Types and Constants
+// =============================================================================
 
-const real logBase = 1.0 / log(2.0);
-// const real logHalfBase = log(0.5)*logBase;
+const real LOG_BASE = 1.0 / log(2.0);
 
 alias Complex = Tuple!(real, real);
 alias Coord = Tuple!(int, int);
 
-struct Iters { 
-  int i; 
-  double d; 
-  this(int iv, double dv) { 
-    this.i = iv; 
-    this.d = dv; 
-  }
+struct IterResult {
+    int iterations;
+    double smoothed;
+    
+    this(int i, double s) {
+        iterations = i;
+        smoothed = s;
+    }
 }
 
-enum FType { mandelbrot, multibrot, ship }
+enum FractalType { 
+    mandelbrot, 
+    multibrot, 
+    ship 
+}
+
 enum ColorFunc {
-  ultrafrac,
-  hsv,
-  gray,
-  blue,
-  red,
-  base,
-  seashore,
-  fire,
-  oceanid,
-  cnfsso,
-  acid,
-  softhours
-}
-enum BuddhaState { none, buddha, antibuddha }
-
-shared int[][] buddha_data;
-shared uint max_i = 20;
-shared int max_bi = 1;
-shared int min_bi = 20;
-
-shared Complex origin = Complex(0.5, 0.0);
-shared real radius = 2.0;
-
-shared BuddhaState buddha = BuddhaState.none;
-shared int paletteSize = 20;
-shared float paletteOffset = 0.0;
-
-shared FType type;
-shared ColorFunc colorfunc;
-
-shared float multibrotExp = 2.0;
-
-// custom palettes
-
-// aka "Earth and Sky"
-const Color4f[] ultrafrac_palette = [
-  RGBtoColor4f(66, 30, 15),
-  RGBtoColor4f(25, 7, 26),
-  RGBtoColor4f(9, 1, 47),
-  RGBtoColor4f(4, 4, 73),
-  RGBtoColor4f(0, 7, 100),
-  RGBtoColor4f(12, 44, 138),
-  RGBtoColor4f(24, 82, 177),
-  RGBtoColor4f(57, 125, 209),
-  RGBtoColor4f(134, 181, 229),
-  RGBtoColor4f(211, 236, 248),
-  RGBtoColor4f(241, 233, 191),
-  RGBtoColor4f(248, 201, 95),
-  RGBtoColor4f(255, 170, 0),
-  RGBtoColor4f(204, 128, 0),
-  RGBtoColor4f(153, 87, 0),
-  RGBtoColor4f(106, 52, 3),
-];
-
-const Color4f[] seashore_palette = [
-  Color4f(0.7909, 0.9961, 0.763),
-  Color4f(0.8974, 0.8953, 0.6565),
-  Color4f(0.9465, 0.3161, 0.1267),
-  Color4f(0.5184, 0.1109, 0.0917),
-  Color4f(0.0198, 0.4563, 0.6839),
-  Color4f(0.5385, 0.8259, 0.8177)
-];
-
-const Color4f[] fire_palette = [
-  Color4f(0, 0, 0),
-  Color4f(1, 0, 0),
-  Color4f(1, 1, 0),
-  Color4f(1, 1, 1),
-  Color4f(1, 1, 0),
-  Color4f(1, 0, 0)
-];
-
-const Color4f[] oceanid_palette = [
-  Color4f(0, 0, 0),
-  Color4f(0, 0, 1),
-  Color4f(0, 1, 1),
-  Color4f(1, 1, 1),
-  Color4f(0, 1, 1),
-  Color4f(0, 0, 1)
-];
-
-const Color4f[] cnfsso_palette = [
-  RGBtoColor4f(244, 241, 222),
-  RGBtoColor4f(224, 122, 95),
-  RGBtoColor4f(61, 64, 91),
-  RGBtoColor4f(129, 178, 154),
-  RGBtoColor4f(242, 204, 143)
-];
-
-const Color4f[] acid_palette = [
-  RGBtoColor4f(239, 71, 111),
-  RGBtoColor4f(255, 209, 102),
-  RGBtoColor4f(6, 214, 160),
-  RGBtoColor4f(17, 138, 178),
-  RGBtoColor4f(7, 59, 76)
-];
-
-const Color4f[] softhours_palette = [
-  RGBtoColor4f(205, 180, 219),
-  RGBtoColor4f(255, 200, 221),
-  RGBtoColor4f(255, 175, 204),
-  RGBtoColor4f(189, 224, 254),
-  RGBtoColor4f(162, 210, 255)
-];
-
-// preset functions
-
-void initArr(int w, int h) {
-  buddha_data.length = w;
-
-  for(int i=0; i < w; i++) {
-    buddha_data[i].length = h;
-    for (int j=0; j<h; j++)
-      buddha_data[i][j] = 0;
-  }
+    ultrafrac,
+    hsv,
+    gray,
+    blue,
+    red,
+    base,
+    seashore,
+    fire,
+    oceanid,
+    cnfsso,
+    acid,
+    softhours
 }
 
-void setIter(int i) {
-  max_i = i;
-  min_bi = i;
-  paletteSize = cast(int)(i*0.3);
+enum BuddhaMode { 
+    none, 
+    buddha, 
+    antibuddha 
 }
 
-void setOrigin(real centerX, real centerY, real newRadius) {
-  origin[0] = -centerX;
-  origin[1] = centerY;
-  // origin = Complex(-centerX, centerY);
-  radius = newRadius;
+enum PrecisionMode {
+    standard,
+    arbitrary
 }
 
-void setBuddha(BuddhaState state = BuddhaState.none) {
-  buddha = state;
-}
+// =============================================================================
+// Configuration Structs (no mutable global state)
+// =============================================================================
 
-void setColorFunc(ColorFunc value = ColorFunc.init) {
-  colorfunc = value;
-}
-
-void setType(FType value = FType.init) {
-  type = value;
-}
-
-void setMultibrotBase(float value = 2.0) {
-  multibrotExp = value;
-}
-
-void setPaletteSize(int psz = 0, float poff = 0.0) {
-  if (psz)
-    paletteSize = psz;
-  else 
-    paletteSize = max_i;
-  
-  paletteOffset = poff;
-}
-
-void clearBuddhaData() {
-  for(int i = 0; i < buddha_data.length; i++)
-    buddha_data[i][] = 0;
-}
-
-// calculators
-Iters iterate(int pZi, int pZr, int w, int h) {
-  Complex[] iter_history;
-  if (buddha)
-    iter_history.length = max_i+1;
-
-  const Complex convertedPoint = convertPixelToPoint(pZr, pZi, w, h);
-  const real Cr = convertedPoint[0];
-  const real Ci = convertedPoint[1];
-
-	real Zr = 0;
-	real Zi = 0;
-	int iter;
-	real Zr_temp = 0;
-
-  if (type == FType.multibrot && multibrotExp != 2.0) {
-    real r;
-
-    // using std.complex it would be easier
-    // but it wouldn't be interesting enough
-    // here's the code
-    //
-    // auto Zn = complex(Zr, Zi);
-
-    // for (iter = 0; Zr*Zr + Zi*Zi <= (1 << 16) && iter < max_i; iter++) {
-    //   Zn = pow(Zn, multibrotExp);
-    //   Zr = Zn.re + Cr;
-    //   Zi = Zn.im + Ci;
-    //   Zn = complex(Zr, Zi);
-
-    //   if (buddha)
-    //     iter_history[iter] = Complex(Zr, Zi);
-    // }
-
-    if (multibrotExp > 0) {
-      for (iter = 0; Zr*Zr + Zi*Zi <= (1 << 16) && iter < max_i; iter++) {
-        r = pow(Zr*Zr + Zi*Zi, multibrotExp/2);
-        Zr_temp = r * cos(multibrotExp * atan2(Zi, Zr)) + Cr;
-        Zi = r * sin(multibrotExp * atan2(Zi, Zr)) + Ci;
-        Zr = Zr_temp;
+struct RenderConfig {
+    real originX = -0.5;
+    real originY = 0.0;
+    real radius = 2.0;
+    
+    string originXStr = "-0.5";
+    string originYStr = "0.0";
+    string radiusStr = "2.0";
+    
+    int width = 800;
+    int height = 800;
+    
+    uint maxIterations = 100;
+    
+    FractalType fractalType = FractalType.mandelbrot;
+    float multibrotExp = 2.0;
+    
+    ColorFunc colorFunc = ColorFunc.ultrafrac;
+    int paletteSize = 100;
+    float paletteOffset = 0.0;
+    bool paletteReverse = false;
+    string paletteFile = "";
+    
+    BuddhaMode buddhaMode = BuddhaMode.none;
+    
+    PrecisionMode precisionMode = PrecisionMode.standard;
+    uint arbitraryPrecision = 50;
+    
+    static PrecisionMode detectPrecisionMode(real radius) {
+        if (radius < 1e-12) {
+            return PrecisionMode.arbitrary;
+        }
+        return PrecisionMode.standard;
+    }
+    
+    static uint calculatePrecision(real radius) {
+        // TODO: this looks like shit
+        if (radius >= 1e-10) return 30;
+        if (radius >= 1e-15) return 50;
+        if (radius >= 1e-20) return 70;
+        if (radius >= 1e-30) return 100;
+        return 150;
+    }
+    
+    static uint calculateOptimalPrecision(real radius, int width, int height) {
+        import std.math : log10, ceil;
+        import std.algorithm : max;
         
-        if (buddha)
-          iter_history[iter] = Complex(Zr, Zi);
-      }
-    } else if (multibrotExp < 0) {
-      auto m = -multibrotExp;
-      for (iter = 0; Zr*Zr + Zi*Zi <= (1 << 16) && iter < max_i; iter++) {
-        r = pow(Zr*Zr + Zi*Zi, m/2);
-        Zr_temp = r * cos(m * atan2(Zi, Zr));
-        Zi = r * sin(m * atan2(Zi, Zr));
-        Zr = Zr_temp;
+        int maxDim = max(width, height);
+        real pixelSpacing = (radius * 2.0) / maxDim;
+        
+        real logPixelSpacing = log10(pixelSpacing);
+        uint digitsNeeded = cast(uint)(ceil(-logPixelSpacing) + 25);
+        
+        uint minPrecision = 50;
+        
+        uint maxPrecision = 500;
+        
+        return max(minPrecision, min(digitsNeeded, maxPrecision));
+    }
+}
 
-        // dividing (1 + 0i) / z
-        r = (Zr*Zr + Zi*Zi);
-        if (r == 0) {
-          Zr = Cr;
-          Zi = Ci;
-        } else {
-          Zr_temp = Zr / r + Cr;
-          Zi = -Zi / r + Ci;
-          Zr = Zr_temp;
+// =============================================================================
+// Color Palettes
+// =============================================================================
+
+__gshared Color4f[][string] _paletteCache;
+__gshared Object _paletteCacheMutex = new Object();
+
+Color4f[] getPalette(ColorFunc cf, string paletteFile = "", bool reverse = false) {
+    import palette_loader : loadPaletteFromFile, reversePalette;
+    import std.conv;
+    import std.format;
+    
+    // TODO: load arbitrary palettes
+    string targetFile;
+    if (paletteFile.length > 0) {
+        targetFile = paletteFile;
+    } else {
+        final switch (cf) {
+            case ColorFunc.ultrafrac: targetFile = "ultrafrac.json"; break;
+            case ColorFunc.seashore: targetFile = "seashore.json"; break;
+            case ColorFunc.fire: targetFile = "fire.json"; break;
+            case ColorFunc.oceanid: targetFile = "oceanid.json"; break;
+            case ColorFunc.cnfsso: targetFile = "cnfsso.json"; break;
+            case ColorFunc.acid: targetFile = "acid.json"; break;
+            case ColorFunc.softhours: targetFile = "softhours.json"; break;
+            case ColorFunc.hsv:
+            case ColorFunc.gray:
+            case ColorFunc.blue:
+            case ColorFunc.red:
+            case ColorFunc.base:
+                targetFile = "ultrafrac.json";
+                break;
+        }
+    }
+    
+    string cacheKey = format!"%s:%s"(targetFile, reverse ? "r" : "n");
+    
+    synchronized (_paletteCacheMutex) {
+        if (cacheKey in _paletteCache) {
+            return _paletteCache[cacheKey].dup;
         }
         
-        if (buddha)
-          iter_history[iter] = Complex(Zr, Zi);
+        Color4f[] loaded = null;
+        
+        if (paletteFile.length > 0) {
+            loaded = loadPaletteFromFile(paletteFile);
+            if (loaded is null) {
+                writeln("WARNING: Failed to load palette from '", paletteFile, "', trying default");
+            }
+        }
+        
+        if (loaded is null) {
+            loaded = loadPaletteFromFile(targetFile);
+        }
+        
+        if (loaded is null && targetFile != "ultrafrac.json") {
+            loaded = loadPaletteFromFile("ultrafrac.json");
+            if (loaded !is null) {
+                writeln("WARNING: Palette '", targetFile, "' not found, using ultrafrac.json");
+            }
+        }
+        
+        if (loaded is null) {
+            writeln("ERROR: No palette files found, using fallback gradient");
+            Color4f[] fallback;
+            for (int i = 0; i < 256; i++) {
+                float v = cast(float)i / 255.0f;
+                fallback ~= Color4f(v, v, v);
+            }
+            loaded = fallback;
+        }
+        
+        if (reverse) {
+            loaded = reversePalette(loaded);
+        }
+        
+        _paletteCache[cacheKey] = loaded;
+        
+        return loaded;
+    }
+}
+
+// =============================================================================
+// Coordinate Conversion
+// =============================================================================
+
+/// Convert pixel coordinates to complex plane coordinates
+/// px = column (0 to width-1), py = row (0 to height-1)
+Complex pixelToComplex(int px, int py, const ref RenderConfig cfg) {
+    real di, dr;
+    
+    if (cfg.width == cfg.height) {
+        di = 0;
+        dr = 0;
+    } else {
+        real diff = cast(real)(max(cfg.width, cfg.height) - min(cfg.width, cfg.height)) / min(cfg.width, cfg.height);
+        di = cfg.width > cfg.height ? diff : 0;
+        dr = cfg.width > cfg.height ? 0 : diff;
+    }
+    
+    const auto pixelSize = cfg.radius * 2 / min(cfg.width, cfg.height);
+    
+    real cr = (to!real(px) * pixelSize) - (-cfg.originX + cfg.radius * (1 + di));
+    real ci = -(to!real(py) * pixelSize) + (cfg.originY + cfg.radius * (1 + dr));
+    
+    return Complex(cr, ci);
+}
+
+/// Convert complex coordinates back to pixel
+/// Returns Coord(column, row) = (px, py)
+Coord complexToPixel(real cr, real ci, const ref RenderConfig cfg) {
+    real di, dr;
+    
+    if (cfg.width == cfg.height) {
+        di = 0;
+        dr = 0;
+    } else {
+        real diff = cast(real)(max(cfg.width, cfg.height) - min(cfg.width, cfg.height)) / min(cfg.width, cfg.height);
+        di = cfg.width > cfg.height ? diff : 0;
+        dr = cfg.width > cfg.height ? 0 : diff;
+    }
+    
+    const auto pixelSize = cfg.radius * 2 / min(cfg.width, cfg.height);
+    
+    int px = cast(int)(round((cr + (-cfg.originX) + cfg.radius * (1 + di)) / pixelSize));
+    int py = cast(int)(round(cfg.height - (ci - cfg.originY + cfg.radius * (1 + dr)) / pixelSize));
+    
+    return Coord(px, py);
+}
+
+// =============================================================================
+// Iteration Functions (Pure, No Side Effects)
+// =============================================================================
+
+/// Standard precision Mandelbrot iteration
+IterResult iterateStandard(int px, int py, const ref RenderConfig cfg) {
+    const Complex c = pixelToComplex(px, py, cfg);
+    const real cr = c[0];
+    const real ci = c[1];
+    
+    real zr = 0;
+    real zi = 0;
+    real zrTemp;
+    int iter;
+    
+    const real escapeRadius = 1 << 16;
+    
+    if (cfg.fractalType == FractalType.multibrot && cfg.multibrotExp != 2.0) {
+        real r;
+        
+        if (cfg.multibrotExp > 0) {
+            for (iter = 0; zr*zr + zi*zi <= escapeRadius && iter < cfg.maxIterations; iter++) {
+                r = pow(zr*zr + zi*zi, cfg.multibrotExp/2);
+                zrTemp = r * cos(cfg.multibrotExp * atan2(zi, zr)) + cr;
+                zi = r * sin(cfg.multibrotExp * atan2(zi, zr)) + ci;
+                zr = zrTemp;
+            }
+        } else if (cfg.multibrotExp < 0) {
+            auto m = -cfg.multibrotExp;
+            for (iter = 0; zr*zr + zi*zi <= escapeRadius && iter < cfg.maxIterations; iter++) {
+                r = pow(zr*zr + zi*zi, m/2);
+                zrTemp = r * cos(m * atan2(zi, zr));
+                zi = r * sin(m * atan2(zi, zr));
+                zr = zrTemp;
+                
+                r = zr*zr + zi*zi;
+                if (r == 0) {
+                    zr = cr;
+                    zi = ci;
+                } else {
+                    zrTemp = zr / r + cr;
+                    zi = -zi / r + ci;
+                    zr = zrTemp;
+                }
+            }
+        } else {
+            for (iter = 0; zr*zr + zi*zi <= escapeRadius && iter < cfg.maxIterations; iter++) {
+                zr = 1 + cr;
+                zi = ci;
+            }
+        }
+    } else if (cfg.fractalType == FractalType.ship) {
+        for (iter = 0; zr*zr + zi*zi <= escapeRadius && iter < cfg.maxIterations; iter++) {
+            zrTemp = zr*zr - zi*zi + cr;
+            zi = abs(2*zr*zi) + ci;
+            zr = zrTemp;
       }
     } else {
-      for (iter = 0; Zr*Zr + Zi*Zi <= (1 << 16) && iter < max_i; iter++) {
-        Zr_temp = 1 + Cr;
-        Zi = 0 + Ci;
-        Zr = Zr_temp;
-
-        if (buddha)
-          iter_history[iter] = Complex(Zr, Zi);
-      }
-    }
-  } else if (type == FType.ship) {
-    for (iter = 0; Zr*Zr + Zi*Zi <= (1 << 16) && iter < max_i; iter++) {
-      Zr_temp = Zr*Zr - Zi*Zi + Cr;
-      Zi = abs(2*Zr*Zi) + Ci;
-      Zr = Zr_temp;
-      
-      if (buddha)
-        iter_history[iter] = Complex(Zr, Zi);
-    }
-  } else {
-    for (iter = 0; Zr*Zr + Zi*Zi <= (1 << 16) && iter < max_i; iter++) {
-      Zr_temp = Zr*Zr - Zi*Zi + Cr;
-      Zi = 2*Zr*Zi + Ci;
-      Zr = Zr_temp;
-      
-      if (buddha)
-        iter_history[iter] = Complex(Zr, Zi);
-    }
-  }
-
-  if (buddha != BuddhaState.none) {
-    if (iter < max_i || buddha == BuddhaState.antibuddha) {
-      for (int i=0; i<iter; i++) {
-        Coord point = convertPointToPixel( iter_history[i][0], iter_history[i][1], w, h );
-        if (point[1] >= h || point[0] >= w || point[0] < 0 || point[1] < 0) {
-          continue;
+        for (iter = 0; zr*zr + zi*zi <= escapeRadius && iter < cfg.maxIterations; iter++) {
+            zrTemp = zr*zr - zi*zi + cr;
+            zi = 2*zr*zi + ci;
+            zr = zrTemp;
         }
-        atomicOp!"+="(buddha_data[ point[0] ][ point[1] ], 1);
-      }
     }
-  }
-
-	double iter_d = iter;
-
-  if (type == FType.multibrot && multibrotExp <= 1) {
-    iter = max_i - iter;
-  }
-
-	if (iter < max_i) {
-		const real log_zn = log(Zr*Zr + Zi*Zi) * 0.5;
-		const double nu = log( log_zn * logBase ) * logBase;
-
-    iter_d = 1 + to!double(iter) - nu;
-	}
-
-  return Iters(iter, iter_d);
+    
+    // Smooth iteration count
+    double smoothed = iter;
+    
+    if (cfg.fractalType == FractalType.multibrot && cfg.multibrotExp <= 1) {
+        iter = cfg.maxIterations - iter;
+    }
+    
+    if (iter < cfg.maxIterations) {
+        const real logZn = log(zr*zr + zi*zi) * 0.5;
+        const double nu = log(logZn * LOG_BASE) * LOG_BASE;
+        smoothed = 1 + to!double(iter) - nu;
+    }
+    
+    return IterResult(iter, smoothed);
 }
 
-// coloring
-Color4f pixelcolor(int iter, double iter_d) {
-  if ( iter == max_i ) return Color4f(0,0,0);
+/// GMP-based arbitrary precision iteration
+IterResult iterateGMPDirect(int px, int py, const ref RenderConfig cfg, 
+                            const ref GMPPixelConverter converter) {
+    const double escapeRadius2 = (1 << 16);
+    const double maxDoubleMag2 = 1e200;
+    
+    double zr = 0.0;
+    double zi = 0.0;
+    double cr = converter.originX.toDouble() + 
+                (converter.radius.toDouble() * ((cast(double)px / converter.minDim) * 2.0 - (1.0 + converter.di)));
+    double ci = converter.originY.toDouble() + 
+                (converter.radius.toDouble() * -((cast(double)py / converter.minDim) * 2.0 - (1.0 + converter.dr)));
+    
+    int escapeCheckInterval = 1;
+    if (cfg.maxIterations > 1000) {
+        if (cfg.maxIterations > 100000) {
+            escapeCheckInterval = 50;
+        } else if (cfg.maxIterations > 10000) {
+            escapeCheckInterval = 20;
+        } else if (cfg.maxIterations > 4000) {
+            escapeCheckInterval = 10;
+        } else {
+            escapeCheckInterval = 5;
+        }
+    }
+    
+    int iter;
+    bool usingGMP = false;
+    GMPComplex zGMP;
+    GMPComplex cGMP;
+    
+    for (iter = 0; iter < cfg.maxIterations; iter++) {
+        if (!usingGMP) {
+            double zrTemp = zr * zr - zi * zi + cr;
+            zi = 2.0 * zr * zi + ci;
+            zr = zrTemp;
+            
+            double mag2 = zr * zr + zi * zi;
+            
+            bool shouldSwitch = false;
+            if (mag2 > maxDoubleMag2) {
+                shouldSwitch = true;
+            } else if (iter >= 3500 && mag2 < escapeRadius2 && (cfg.maxIterations - iter) > 1000) {
+                shouldSwitch = true;
+            }
+            
+            if (shouldSwitch) {
+                usingGMP = true;
+                zGMP = GMPComplex(zr, zi);
+                cGMP = converter.pixelToComplex(px, py);
+            } else {
+                if (iter % escapeCheckInterval == 0 || iter == cfg.maxIterations - 1) {
+                    if (mag2 > escapeRadius2) {
+                        double logZn = log(mag2) * 0.5;
+                        double nu = log(logZn / log(2.0)) / log(2.0);
+                        double smoothed = 1 + cast(double)iter - nu;
+                        return IterResult(iter, smoothed);
+                    }
+                }
+                continue;
+            }
+        }
+        
+        if (usingGMP) {
+            zGMP.squareAndAdd(cGMP);
+            
+            if (iter % (escapeCheckInterval * 2) == 0 || iter == cfg.maxIterations - 1) {
+                double mag2 = zGMP.magnitudeSquaredDouble();
+                if (mag2 > escapeRadius2) {
+                    double logZn = log(mag2) * 0.5;
+                    double nu = log(logZn / log(2.0)) / log(2.0);
+                    double smoothed = 1 + cast(double)iter - nu;
+                    return IterResult(iter, smoothed);
+                }
+            }
+        }
+    }
+    
+    return IterResult(cast(int)cfg.maxIterations, cast(double)cfg.maxIterations);
+}
 
-  if (colorfunc == ColorFunc.ultrafrac || colorfunc == ColorFunc.seashore || colorfunc == ColorFunc.fire || 
-    colorfunc == ColorFunc.oceanid || colorfunc == ColorFunc.cnfsso || colorfunc == ColorFunc.acid ||
-    colorfunc == ColorFunc.softhours) {
+IterResult iterate(int px, int py, const ref RenderConfig cfg) {
+    return iterateStandard(px, py, cfg);
+}
 
-    Color4f[] palette;
+struct OrbitResult {
+    IterResult iter;
+    Complex[] orbit;
+}
 
-    if (colorfunc == ColorFunc.ultrafrac)
-      palette = ultrafrac_palette.dup;
-    else if (colorfunc == ColorFunc.seashore)
-      palette = seashore_palette.dup;
-    else if (colorfunc == ColorFunc.fire)
-      palette = fire_palette.dup;
-    else if (colorfunc == ColorFunc.oceanid)
-      palette = oceanid_palette.dup;
-    else if (colorfunc == ColorFunc.cnfsso)
-      palette = cnfsso_palette.dup;
-    else if (colorfunc == ColorFunc.acid)
-      palette = acid_palette.dup;
-    else if (colorfunc == ColorFunc.softhours)
-      palette = softhours_palette.dup;
-    else
-      palette = ultrafrac_palette.dup;
+OrbitResult iterateWithOrbit(int px, int py, const ref RenderConfig cfg) {
+    OrbitResult result;
+    result.orbit.reserve(cfg.maxIterations);
+    
+    const Complex c = pixelToComplex(px, py, cfg);
+    const real cr = c[0];
+    const real ci = c[1];
+    
+    real zr = 0;
+    real zi = 0;
+    real zrTemp;
+    int iter;
+    
+    const real escapeRadius = 1 << 16;
+    
+    if (cfg.fractalType == FractalType.ship) {
+        for (iter = 0; zr*zr + zi*zi <= escapeRadius && iter < cfg.maxIterations; iter++) {
+            zrTemp = zr*zr - zi*zi + cr;
+            zi = abs(2*zr*zi) + ci;
+            zr = zrTemp;
+            result.orbit ~= Complex(zr, zi);
+        }
+    } else {
+        for (iter = 0; zr*zr + zi*zi <= escapeRadius && iter < cfg.maxIterations; iter++) {
+            zrTemp = zr*zr - zi*zi + cr;
+            zi = 2*zr*zi + ci;
+            zr = zrTemp;
+            result.orbit ~= Complex(zr, zi);
+        }
+    }
+    
+    double smoothed = iter;
+    if (iter < cfg.maxIterations) {
+        const real logZn = log(zr*zr + zi*zi) * 0.5;
+        const double nu = log(logZn * LOG_BASE) * LOG_BASE;
+        smoothed = 1 + to!double(iter) - nu;
+    }
+    
+    result.iter = IterResult(iter, smoothed);
+    return result;
+}
 
-    ubyte c1, c2;
+// =============================================================================
+// Coloring Functions (Pure)
+// =============================================================================
 
-    auto paletteBlock = to!float(paletteSize)/palette.length;
+/// Compute pixel color from iteration result
+Color4f computeColor(IterResult iter, const ref RenderConfig cfg) {
+    if (iter.iterations == cfg.maxIterations) {
+        return Color4f(0, 0, 0);
+    }
+    
+    double iterD = iter.smoothed;
+    
+    switch (cfg.colorFunc) {
+        case ColorFunc.ultrafrac:
+        case ColorFunc.seashore:
+        case ColorFunc.fire:
+        case ColorFunc.oceanid:
+        case ColorFunc.cnfsso:
+        case ColorFunc.acid:
+        case ColorFunc.softhours:
+            return paletteColor(iterD, cfg);
+            
+        case ColorFunc.hsv:
+            return hsvColor(iterD, cfg);
+            
+        case ColorFunc.base:
+            return iterD > 0 ? Color4f(1, 1, 1) : Color4f(0, 0, 0);
+            
+        case ColorFunc.gray:
+        case ColorFunc.blue:
+        case ColorFunc.red:
+            return gradientColor(iterD, cfg);
+            
+        default:
+            return Color4f(0, 0, 0);
+    }
+}
 
-    iter_d = ( iter_d + paletteOffset*paletteSize ) % max_i;
-
-    c1 = cast(ubyte)( floor(abs(iter_d)/paletteBlock) % palette.length );
-    c2 = iter + paletteBlock >= max_i ? 4 : to!ubyte( (c1 + 1) % palette.length );
-
-    const float vd = (iter_d % paletteBlock) / paletteBlock;
+private Color4f paletteColor(double iterD, const ref RenderConfig cfg) {
+    auto palette = getPalette(cfg.colorFunc, cfg.paletteFile, cfg.paletteReverse);
+    
+    double effectiveIter = iterD;
+    if (cfg.maxIterations > 10000) {
+        double remaining = cfg.maxIterations - iterD + 1;
+        if (remaining > 0) {
+            double logMax = log(cast(double)cfg.maxIterations);
+            double logRemaining = log(remaining);
+            effectiveIter = (logMax - logRemaining) / logMax * cfg.paletteSize * 2;
+        }
+    }
+    
+    double cyclePos = (effectiveIter + cfg.paletteOffset * cfg.paletteSize) / cfg.paletteSize;
+    cyclePos = cyclePos - floor(cyclePos);
+    
+    double palettePos = cyclePos * palette.length;
+    size_t c1 = cast(size_t)(floor(palettePos)) % palette.length;
+    size_t c2 = (c1 + 1) % palette.length;
+    
+    double t = palettePos - floor(palettePos);
+    double smooth_t = (1 - cos(t * PI)) / 2;
     
     return Color4f(
-      palette[c1].r + (palette[c2].r - palette[c1].r) * vd,
-      palette[c1].g + (palette[c2].g - palette[c1].g) * vd,
-      palette[c1].b + (palette[c2].b - palette[c1].b) * vd,
+        palette[c1].r + (palette[c2].r - palette[c1].r) * smooth_t,
+        palette[c1].g + (palette[c2].g - palette[c1].g) * smooth_t,
+        palette[c1].b + (palette[c2].b - palette[c1].b) * smooth_t,
     );
-  } else if (colorfunc == ColorFunc.hsv) {
-    auto v = 2*(iter_d/paletteSize) % 2;
+}
 
-    const auto vc = v > 1 ? 2-v : v;
+private Color4f hsvColor(double iterD, const ref RenderConfig cfg, bool reverse = false) {
+    auto v = 2 * (iterD / cfg.paletteSize) % 2;
+    if (reverse) v = 2 - v;
+    const auto vc = v > 1 ? 2 - v : v;
     v /= 2;
-    auto vl = 0.25+vc*2;
-    auto vs = 0.75+vc*2;
+    auto vl = 0.25 + vc * 2;
+    auto vs = 0.75 + vc * 2;
 
-    auto c = hsv(360.0*v, vs > 1 ? 1 : vs, vl > 1 ? 1 : vl);
+    auto c = hsv(360.0 * v, vs > 1 ? 1 : vs, vl > 1 ? 1 : vl);
     return Color4f(c.r, c.g, c.b);
-  } else if (colorfunc == ColorFunc.base) {
-    if (iter_d > 0) return Color4f(1.0, 1.0, 1.0);
-    return Color4f(0, 0, 0);
-  } else {
-    auto v = 2*iter_d/paletteSize % 2;
-    v = v > 1 ? 2-v : v;
-    // if (v > 1) v = 1.;
-    if (colorfunc == ColorFunc.blue)
-      return Color4f(pow(v, 4), pow(v, 2)*2, v*3);
-    
-    if (colorfunc == ColorFunc.red)
-      return Color4f(v*3, pow(v, 2)*2, pow(v, 4));
+}
 
+private Color4f gradientColor(double iterD, const ref RenderConfig cfg, bool reverse = false) {
+    auto v = 2 * iterD / cfg.paletteSize % 2;
+    v = v > 1 ? 2 - v : v;
+    if (reverse) v = 1.0 - v;
+    
+    switch (cfg.colorFunc) {
+        case ColorFunc.blue:
+            return Color4f(pow(v, 4), pow(v, 2) * 2, v * 3);
+        case ColorFunc.red:
+            return Color4f(v * 3, pow(v, 2) * 2, pow(v, 4));
+        default:
     return Color4f(v, v, v);
   }
 }
 
-Coord convertPointToPixel(real Cr, real Ci, int w, int h) {
-  int pZi, pZr;
-  real di, dr;
-
-  if (w == h) {
-    di = 0;
-    dr = 0;
-  } else {
-    real diff = cast(real)( max(w, h) - min(w, h) )/min(w, h);
-    di = w > h ? diff : 0;
-    dr = w > h ? 0 : diff;
-  }
-
-  const auto p = radius*2/min(w, h);
-
-  pZi = cast(int)( round( (Cr + origin[0] + radius*(1 + di))/p ) );
-  pZr = cast(int)( round( h-(Ci - origin[1] + radius*(1 + dr))/p ) );
-
-
-  return Coord(pZi, pZr);
-}
-
-Complex convertPixelToPoint(int pZr, int pZi, int w, int h) {
-  real Cr, Ci;
-  real di, dr;
-
-  if (w == h) {
-    di = 0;
-    dr = 0;
-  } else {
-    real diff = cast(real)( max(w, h) - min(w, h) )/min(w, h);
-    di = w > h ? diff : 0;
-    dr = w > h ? 0 : diff;
-  }
-
-  const auto p = radius*2/min(w, h);
-
-  Cr =  (to!real(pZi)*p) - (origin[0] + radius*(1 + di));
-  Ci = -(to!real(pZr)*p) + (origin[1] + radius*(1 + dr));
-
-  return Complex(Cr, Ci);
-}
-
-void updateMaxBI() {
-  max_bi = 0;
-  foreach (k, v; buddha_data) {
-    foreach (key, value; v) {
-      if (max_bi < value) max_bi = value;
-    }
-  }
-  writeln("Max buddha: ", max_bi);
-
-  double local_sums = 0;
-  foreach (k, v; buddha_data) {
-    long sum = 0;
-    foreach (key, value; v) {
-      sum += value;
-    }
-    local_sums += sum / v.length;
-  }
-}
-
-Color4f getBuddhabrotted(int pZr, int pZi) {
-  const int v = buddha_data[pZr][pZi];
-
-  double c =  pow( cast(double)(v) / cast(double)(max_bi), 0.25 );
-  
+Color4f computeBuddhaColor(int hitCount, int maxHitCount) {
+    if (maxHitCount == 0) return Color4f(0, 0, 0);
+    
+    double c = pow(cast(double)(hitCount) / cast(double)(maxHitCount), 0.25);
   if (c > 1) c = 1;
 
   return Color4f(c, c, c);
-}
-
-// service 
-Color4f RGBtoColor4f(ubyte r, ubyte g, ubyte b) {
-  return Color4f(
-    to!float(r)/255.,
-    to!float(g)/255.,
-    to!float(b)/255.
-  );
 }
