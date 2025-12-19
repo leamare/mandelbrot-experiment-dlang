@@ -32,7 +32,7 @@ It's not ready to handle unreasonable JSON values and cli args, so be careful wi
   - `-b | --buddha` - Create Buddhabrot, false by default
   - `-n | --antibuddha` - Create Anti Buddhabrot, false by default
   - **NOTE:** Only one of -b and -n can be active at a time (-b has priority)
-  - `-t | --type` - Fractal type (mandelbrot, multibrot, ship), **mandelbrot** by default
+  - `-t | --type` - Fractal type (mandelbrot, multibrot, ship, mandelbar), **mandelbrot** by default
   - `-e | --exponent` - Multibrot exponent, **2.0** by default
 - Coloring
   - `-p | --palettesize` - Palette size, Dwell number by default

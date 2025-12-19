@@ -45,7 +45,7 @@ int main(string[] args) {
         "palettesize|p", "Palette scale, MAX_ITER by default", &cli.palette,
         "output|o", "Output filename, generated based on parameters by default", &filename,
         "dir|d", "Output directory, `out` by default (created if does not exist)", &flow.workdir,
-        "type|t", "Fractal type (mandelbrot, multibrot, ship), mandelbrot by default", &cli.fractalType,
+        "type|t", "Fractal type (mandelbrot, multibrot, ship, mandelbar), mandelbrot by default", &cli.fractalType,
         "colorfunc|c", "Coloring function (ultrafrac, hsv, gray, blue, red, seashore, fire, oceanid, cnfsso, acid, softhours), ultrafrac by default", &cli.colorfunc,
         "exponent|e", "Multibrot exponent, 2.0 by default", &cli.multibrotExp,
         "progress|s", "Save results to a separate file while working/import progress on load if found\n" ~
