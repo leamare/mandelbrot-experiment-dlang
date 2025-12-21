@@ -12,7 +12,10 @@ import std.numeric : gcd;
  * Multi-Double Arithmetic for Extended Precision
  */
 enum uint MULTIDOUBLE_MIN_COMPONENTS = 2;
-enum uint MULTIDOUBLE_MAX_COMPONENTS = 40;
+enum uint MULTIDOUBLE_MAX_COMPONENTS = 100;
+enum uint MULTIDOUBLE_DIGITS_PER_COMPONENT = 16;
+enum uint MULTIDOUBLE_EXTRA_COMPONENTS = 10;
+enum double MULTIDOUBLE_NORMALIZE_THRESHOLD = 0.001;
 
 private BigInt bigPow10(int exp) {
     BigInt result = BigInt(1);
@@ -204,7 +207,7 @@ struct MultiDouble {
     }
     
     uint precisionDigits() const {
-        return cast(uint)(components.length * 15);
+        return cast(uint)(components.length * MULTIDOUBLE_DIGITS_PER_COMPONENT);
     }
     
     double toDouble() const {
@@ -288,7 +291,6 @@ struct MultiDouble {
             return;
         }
         
-        enum double NORMALIZE_THRESHOLD = 0.1;
         
         for (uint i = 0; i + 1 < components.length; i++) {
             if (components[i] == 0.0 || components[i + 1] == 0.0) {
@@ -298,7 +300,7 @@ struct MultiDouble {
             double absI = std.math.abs(components[i]);
             double absI1 = std.math.abs(components[i + 1]);
             
-            if (absI > 0 && absI1 > absI * NORMALIZE_THRESHOLD) {
+            if (absI > 0 && absI1 > absI * MULTIDOUBLE_NORMALIZE_THRESHOLD) {
                 double s, e;
                 twoSum(components[i], components[i + 1], s, e);
                 components[i] = s;
@@ -564,7 +566,10 @@ struct MultiDoubleComplex {
 }
 
 uint calculateNumDoubles(uint requiredDigits) {
-    uint numDoubles = cast(uint)((requiredDigits + 14) / 15) + 1;
+    uint baseDoubles = cast(uint)((requiredDigits + MULTIDOUBLE_DIGITS_PER_COMPONENT - 1) / MULTIDOUBLE_DIGITS_PER_COMPONENT);
+    
+    uint numDoubles = baseDoubles + MULTIDOUBLE_EXTRA_COMPONENTS;
+    
     return min(max(numDoubles, MULTIDOUBLE_MIN_COMPONENTS), MULTIDOUBLE_MAX_COMPONENTS);
 }
 
@@ -600,15 +605,21 @@ struct MultiDoublePixelConverter {
     }
     
     MultiDoubleComplex pixelToComplex(int px, int py) const {
-        MultiDouble pxMD = MultiDouble(numDoubles, cast(double)px);
-        MultiDouble pyMD = MultiDouble(numDoubles, cast(double)py);
-        MultiDouble relX = (pxMD * scale) - (originX + radius * MultiDouble(numDoubles, cast(double)(1.0 + di)));
-        MultiDouble relY = (pyMD * scale) + (originY + radius * MultiDouble(numDoubles, cast(double)(1.0 + dr)));
+        double relX = (cast(double)px / minDim) * 2.0 - (1.0 + di);
+        double relY = (cast(double)py / minDim) * 2.0 - (1.0 + dr);
+        
+        MultiDouble relXMD = MultiDouble(numDoubles, relX);
+        MultiDouble relYMD = MultiDouble(numDoubles, relY);
+        
+        MultiDouble offsetX = radius * relXMD;
+        MultiDouble offsetY = radius * relYMD;
+        
+        MultiDouble cReal = originX + offsetX;
+        MultiDouble cImag = originY + offsetY;
         
         MultiDoubleComplex result;
-        result.re = relX;
-        result.im = relY;
-
+        result.re = cReal;
+        result.im = cImag;
         return result;
     }
 }

@@ -7,6 +7,7 @@ import std.algorithm;
 import std.range;
 import std.complex;
 import std.typecons;
+import std.format;
 
 import gmp_arb;
 import precision_unified : PrecisionMethod;
@@ -47,6 +48,7 @@ struct ReferenceOrbit {
     
     /// Escape radius squared
     double escapeRadius2 = (1 << 16);
+    // double escapeRadius2 = 4.0;  // 2.0^2 = escape radius squared (standard Mandelbrot escape radius is 2.0)
     
     /// Method used for computation
     PrecisionMethod methodUsed = PrecisionMethod.double_;
@@ -72,8 +74,46 @@ ReferenceOrbit computeReferenceOrbit(string cRealStr, string cImagStr, uint maxI
                                      PrecisionMethod precisionMethod = PrecisionMethod.auto_) {
     import std.datetime.stopwatch : StopWatch;
     
-    ReferenceOrbit result;
+    debug(gmpdebug) {
+        writeln("DEBUG: computeReferenceOrbit called");
+        stdout.flush();
+    }
+    
+    // Initialize result - use void and initialize fields manually
+    ReferenceOrbit result = void;
+    import std.conv : emplace;
+    
+    // Initialize arrays and other fields first
+    result.zRef = [];  // Initialize array
+    result.zRefDoubleDouble = [];
+    result.zRefBigFloat = [];
+    result.zRefMultiDouble = [];
+    result.zRefGMP = [];
+    result.refIterations = 0;
+    result.escaped = false;
     result.methodUsed = precisionMethod;
+    result.multiDoubleComponents = 0;
+    
+    // Construct cRef directly using emplace to avoid default construction
+    debug(gmpdebug) {
+        writeln("DEBUG: About to create GMPComplex cRef...");
+        stdout.flush();
+    }
+    try {
+        // Use emplace to construct cRef directly, avoiding default construction
+        debug(gmpdebug) {
+            writeln("DEBUG: Emplacing GMPComplex cRef...");
+            stdout.flush();
+        }
+        emplace!GMPComplex(&result.cRef, cRealStr, cImagStr);
+        debug(gmpdebug) {
+            writeln("DEBUG: GMPComplex cRef created successfully");
+            stdout.flush();
+        }
+    } catch (Exception e) {
+        writeln("ERROR: Failed to create GMPComplex: ", e.msg);
+        return result;
+    }
     
     if (maxIterations == 0) {
         writeln("ERROR: maxIterations is 0");
@@ -84,15 +124,20 @@ ReferenceOrbit computeReferenceOrbit(string cRealStr, string cImagStr, uint maxI
         return result;
     }
     
-    try {
-        result.cRef = GMPComplex(cRealStr, cImagStr);
-    } catch (Exception e) {
-        writeln("ERROR: Failed to create GMPComplex: ", e.msg);
-        return result;
+    debug(gmpdebug) {
+        writeln("DEBUG: Reserving space for zRef array...");
+        stdout.flush();
     }
-    
     result.zRef.reserve(maxIterations + 1);
+    debug(gmpdebug) {
+        writeln("DEBUG: Space reserved, adding initial z=0...");
+        stdout.flush();
+    }
     result.zRef ~= Complex!double(0, 0);
+    debug(gmpdebug) {
+        writeln("DEBUG: Initial z added");
+        stdout.flush();
+    }
     result.refIterations = cast(int)maxIterations;
     const double escapeRadius2 = result.escapeRadius2;
     
@@ -110,19 +155,46 @@ ReferenceOrbit computeReferenceOrbit(string cRealStr, string cImagStr, uint maxI
         method == PrecisionMethod.gmp ? "gmp" :
         "double";
     writeln("Computing reference orbit using precision method: ", methodName);
-    write("Progress: ");
+    writeln("  Iterations: ", maxIterations);
+    write("Progress: [");
     stdout.flush();
+    
+    debug(gmpdebug) {
+        writeln("DEBUG: About to start switch statement, method=", methodName);
+        stdout.flush();
+    }
     
     StopWatch timer;
     timer.start();
     int progressInterval = max(1, cast(int)maxIterations / 80);
+    int lastPercent = -1;
     
     switch (method) {
         case PrecisionMethod.double_: {
+            debug(gmpdebug) {
+                writeln("DEBUG: Entering double_ case");
+                stdout.flush();
+            }
             double zr = 0.0;
             double zi = 0.0;
+            debug(gmpdebug) {
+                writeln("DEBUG: About to call result.cRef.re.toDouble()...");
+                stdout.flush();
+            }
             double cr = result.cRef.re.toDouble();
+            debug(gmpdebug) {
+                writeln("DEBUG: cr = ", cr);
+                stdout.flush();
+            }
+            debug(gmpdebug) {
+                writeln("DEBUG: About to call result.cRef.im.toDouble()...");
+                stdout.flush();
+            }
             double ci = result.cRef.im.toDouble();
+            debug(gmpdebug) {
+                writeln("DEBUG: ci = ", ci);
+                stdout.flush();
+            }
             for (uint iter = 0; iter < maxIterations; ++iter) {
                 double zrTemp = zr * zr - zi * zi + cr;
                 zi = 2.0 * zr * zi + ci;
@@ -133,9 +205,17 @@ ReferenceOrbit computeReferenceOrbit(string cRealStr, string cImagStr, uint maxI
                     result.escaped = true;
                     result.refIterations = cast(int)(iter + 1);
                 }
-                if (iter % progressInterval == 0) {
-                    write('.');
-                    stdout.flush();
+                if (iter % progressInterval == 0 || iter == maxIterations - 1) {
+                    int percent = cast(int)((iter + 1) * 100 / maxIterations);
+                    if (percent != lastPercent) {
+                        lastPercent = percent;
+                        if (percent % 10 == 0) {
+                            write(percent);
+                        } else {
+                            write('.');
+                        }
+                        stdout.flush();
+                    }
                 }
             }
             break;
@@ -156,19 +236,47 @@ ReferenceOrbit computeReferenceOrbit(string cRealStr, string cImagStr, uint maxI
                     result.escaped = true;
                     result.refIterations = cast(int)(iter + 1);
                 }
-                if (iter % progressInterval == 0) {
-                    write('.');
-                    stdout.flush();
+                if (iter % progressInterval == 0 || iter == maxIterations - 1) {
+                    int percent = cast(int)((iter + 1) * 100 / maxIterations);
+                    if (percent != lastPercent) {
+                        lastPercent = percent;
+                        if (percent % 10 == 0) {
+                            write(percent);
+                        } else {
+                            write('.');
+                        }
+                        stdout.flush();
+                    }
                 }
             }
             break;
         }
         case PrecisionMethod.multidouble: {
+            debug(gmpdebug) {
+                writeln("DEBUG: Entering multidouble case");
+                stdout.flush();
+            }
             auto coordLen = max(cRealStr.length, cImagStr.length);
             uint requiredDigits = cast(uint)max(50, coordLen + 20);
+            debug(gmpdebug) {
+                writeln("DEBUG: requiredDigits = ", requiredDigits);
+                stdout.flush();
+            }
             uint numDoubles = calculateNumDoubles(requiredDigits);
+            debug(gmpdebug) {
+                writeln("DEBUG: numDoubles = ", numDoubles);
+                stdout.flush();
+            }
             result.multiDoubleComponents = numDoubles;
+            debug(gmpdebug) {
+                writeln("DEBUG: About to create MultiDoubleComplex cMD...");
+                stdout.flush();
+            }
             auto cMD = MultiDoubleComplex(numDoubles, cRealStr, cImagStr);
+            debug(gmpdebug) {
+                writeln("DEBUG: MultiDoubleComplex cMD created");
+                stdout.flush();
+            }
             auto zMD = MultiDoubleComplex(numDoubles, 0.0, 0.0);
             result.zRefMultiDouble.reserve(maxIterations + 1);
             result.zRefMultiDouble ~= zMD;
@@ -183,9 +291,17 @@ ReferenceOrbit computeReferenceOrbit(string cRealStr, string cImagStr, uint maxI
                     result.escaped = true;
                     result.refIterations = cast(int)(iter + 1);
                 }
-                if (iter % progressInterval == 0) {
-                    write('.');
-                    stdout.flush();
+                if (iter % progressInterval == 0 || iter == maxIterations - 1) {
+                    int percent = cast(int)((iter + 1) * 100 / maxIterations);
+                    if (percent != lastPercent) {
+                        lastPercent = percent;
+                        if (percent % 10 == 0) {
+                            write(percent);
+                        } else {
+                            write('.');
+                        }
+                        stdout.flush();
+                    }
                 }
             }
             break;
@@ -206,21 +322,97 @@ ReferenceOrbit computeReferenceOrbit(string cRealStr, string cImagStr, uint maxI
                     result.escaped = true;
                     result.refIterations = cast(int)(iter + 1);
                 }
-                if (iter % progressInterval == 0) {
-                    write('.');
-                    stdout.flush();
+                if (iter % progressInterval == 0 || iter == maxIterations - 1) {
+                    int percent = cast(int)((iter + 1) * 100 / maxIterations);
+                    if (percent != lastPercent) {
+                        lastPercent = percent;
+                        if (percent % 10 == 0) {
+                            write(percent);
+                        } else {
+                            write('.');
+                        }
+                        stdout.flush();
+                    }
                 }
             }
             break;
         }
         case PrecisionMethod.gmp: {
+            debug(gmpdebug) {
+                writeln("DEBUG: Creating GMPComplex cHigh...");
+                stdout.flush();
+            }
             auto cHigh = GMPComplex(cRealStr, cImagStr);
+            debug(gmpdebug) {
+                writeln("DEBUG: cHigh created successfully");
+                stdout.flush();
+            }
+            
+            debug(gmpdebug) {
+                writeln("DEBUG: Creating initial z = 0...");
+                stdout.flush();
+            }
             GMPComplex z = GMPComplex(0.0, 0.0);
+            debug(gmpdebug) {
+                writeln("DEBUG: z created successfully");
+                stdout.flush();
+            }
+            
+            debug(gmpdebug) {
+                writeln("DEBUG: Reserving space for ", maxIterations + 1, " orbit points...");
+                stdout.flush();
+            }
             result.zRefGMP.reserve(maxIterations + 1);
-            result.zRefGMP ~= z;
+            debug(gmpdebug) {
+                writeln("DEBUG: Space reserved");
+                stdout.flush();
+            }
+            
+            debug(gmpdebug) {
+                writeln("DEBUG: Storing initial z = 0...");
+                stdout.flush();
+            }
+            // Store initial z = 0 (use copy constructor)
+            result.zRefGMP ~= GMPComplex(z);
+            debug(gmpdebug) {
+                writeln("DEBUG: Initial z stored, array length: ", result.zRefGMP.length);
+                stdout.flush();
+            }
+            
+            debug(gmpdebug) {
+                writeln("DEBUG: Starting iteration loop...");
+                stdout.flush();
+            }
             for (uint iter = 0; iter < maxIterations; ++iter) {
+                debug(gmpdebug) {
+                    if (iter == 0) {
+                        writeln("DEBUG: First iteration, calling squareAndAdd...");
+                        stdout.flush();
+                    }
+                }
                 z.squareAndAdd(cHigh);
-                result.zRefGMP ~= z;
+                debug(gmpdebug) {
+                    if (iter == 0) {
+                        writeln("DEBUG: squareAndAdd completed, z.re=", z.re.toString()[0..min(30, z.re.toString().length)], "...");
+                        stdout.flush();
+                    }
+                }
+                
+                debug(gmpdebug) {
+                    if (iter == 0) {
+                        writeln("DEBUG: Creating copy of z for array...");
+                        stdout.flush();
+                    }
+                }
+                // Use copy constructor to ensure proper copying
+                result.zRefGMP ~= GMPComplex(z);
+                debug(gmpdebug) {
+                    if (iter == 0) {
+                        writeln("DEBUG: Copy stored, array length: ", result.zRefGMP.length);
+                        stdout.flush();
+                    }
+                }
+                
                 double zr = z.re.toDouble();
                 double zi = z.im.toDouble();
                 result.zRef ~= Complex!double(zr, zi);
@@ -229,10 +421,29 @@ ReferenceOrbit computeReferenceOrbit(string cRealStr, string cImagStr, uint maxI
                     result.escaped = true;
                     result.refIterations = cast(int)(iter + 1);
                 }
-                if (iter % progressInterval == 0) {
-                    write('.');
-                    stdout.flush();
+                if (iter % progressInterval == 0 || iter == maxIterations - 1) {
+                    int percent = cast(int)((iter + 1) * 100 / maxIterations);
+                    if (percent != lastPercent) {
+                        lastPercent = percent;
+                        if (percent % 10 == 0) {
+                            write(percent);
+                        } else {
+                            write('.');
+                        }
+                        stdout.flush();
+                    }
                 }
+                
+                debug(gmpdebug) {
+                    if (iter == 0) {
+                        writeln("DEBUG: First iteration completed successfully");
+                        stdout.flush();
+                    }
+                }
+            }
+            debug(gmpdebug) {
+                writeln("DEBUG: Iteration loop completed, total iterations: ", maxIterations);
+                stdout.flush();
             }
             break;
         }
@@ -251,17 +462,27 @@ ReferenceOrbit computeReferenceOrbit(string cRealStr, string cImagStr, uint maxI
                     result.escaped = true;
                     result.refIterations = cast(int)(iter + 1);
                 }
-                if (iter % progressInterval == 0) {
-                    write('.');
-                    stdout.flush();
+                if (iter % progressInterval == 0 || iter == maxIterations - 1) {
+                    int percent = cast(int)((iter + 1) * 100 / maxIterations);
+                    if (percent != lastPercent) {
+                        lastPercent = percent;
+                        if (percent % 10 == 0) {
+                            write(percent);
+                        } else {
+                            write('.');
+                        }
+                        stdout.flush();
+                    }
                 }
             }
             break;
         }
     }
     
-    writeln();
-    writeln("Reference orbit computed in ", timer.peek().total!"seconds", " s");
+    writeln("] 100%");
+    auto elapsed = timer.peek().total!"seconds";
+    writeln("Reference orbit computed in ", format!"%.2f"(elapsed), " s (", 
+            format!"%.1f"(cast(double)result.refIterations / elapsed), " iter/s)");
     return result;
 }
 

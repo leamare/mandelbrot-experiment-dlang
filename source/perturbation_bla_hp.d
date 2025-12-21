@@ -40,7 +40,7 @@ MultiDoubleComplex[] computeReferenceOrbitMultiDouble(
     );
     
     MultiDoubleComplex z = MultiDoubleComplex(numDoubles, 0.0, 0.0);
-    const double escapeRadius2 = (1 << 16);
+    const double escapeRadius2 = 4.0;  // 2.0^2 = escape radius squared (standard Mandelbrot escape radius is 2.0)
     
     // Store initial Z_ref = 0
     zRefArray ~= MultiDoubleComplex(numDoubles, 0.0, 0.0);
@@ -698,6 +698,40 @@ PerturbResult perturbIterateBLAGMP(
     bool usingLastRef = false;
     int escapeIter = -1;  // Track escape iteration per pixel
     
+    // Ensure escapeRadius2 is valid - if it's NaN or wrong value, use the correct value
+    // Standard Mandelbrot escape radius is 2.0, so escapeRadius2 should be 4.0
+    // Some code paths may pass (1 << 16) = 65536, which is wrong - override it
+    double validEscapeRadius2 = escapeRadius2;
+    if (!(validEscapeRadius2 == validEscapeRadius2) || validEscapeRadius2 <= 0 || validEscapeRadius2 > 100.0) {
+        validEscapeRadius2 = 4.0;  // 2.0^2 = standard Mandelbrot escape radius squared
+    }
+    // Force to 4.0 always for now to debug
+    validEscapeRadius2 = 4.0;
+    GMPFloat escapeRadius2GMP = GMPFloat(validEscapeRadius2);
+    
+    // Debug: print escape radius
+    import std.stdio;
+    static bool escapeRadiusPrinted = false;
+    if (!escapeRadiusPrinted) {
+        stderr.writeln("[DEBUG] escapeRadius2 param=", escapeRadius2, " validEscapeRadius2=", validEscapeRadius2);
+        stderr.flush();
+        escapeRadiusPrinted = true;
+    }
+    
+    // Debug: check initial delta0 magnitude and first few iterations
+    import std.stdio;
+    static int debugPixelCount = 0;
+    if (debugPixelCount < 3) {
+        auto delta0Mag2 = delta0.magnitudeSquared();
+        double delta0Mag2Double = delta0Mag2.toDouble();
+        double delta0Mag = sqrt(delta0Mag2Double);
+        stderr.writeln("[DEBUG pixel ", debugPixelCount, "] Initial delta0 magnitude: ", delta0Mag, " (squared: ", delta0Mag2Double, ")");
+        stderr.writeln("[DEBUG] Escape radius: ", sqrt(validEscapeRadius2), " (squared: ", validEscapeRadius2, ")");
+        stderr.writeln("[DEBUG] delta0 would escape at iter 0: ", delta0Mag2Double > validEscapeRadius2);
+        stderr.flush();
+        debugPixelCount++;
+    }
+    
     while (iter < maxIterations) {
         if (refIter >= cast(int)maxRefIter) {
             if (maxRefIter == 0) break;
@@ -707,31 +741,91 @@ PerturbResult perturbIterateBLAGMP(
         
         if (refIter < 0 || refIter >= cast(int)maxRefIter) break;
         
-        GMPComplex zRef = zRefArray[refIter];
+        // Use reference orbit directly (avoid unnecessary string conversion)
+        // zRefArray elements are already GMPComplex, so we can use them directly
+        const GMPComplex zRef = zRefArray[refIter];
         auto z = zRef + delta;
-        double zMag2 = z.magnitudeSquaredDouble();
         
-        // Check escape
-        if (zMag2 > escapeRadius2) {
-            double logZn = std.math.log(zMag2) * 0.5;
-            double nu = std.math.log(logZn / std.math.log(2.0)) / std.math.log(2.0);
-            result.iterations = iter;
-            result.smoothed = 1 + cast(double)iter - nu;
-            result.glitched = false;
-            result.uncertain = false;
-            return result;
-        }
+        // Skip escape check at iteration 0 - z = zRef[0] + delta0 = 0 + delta0 = delta0
+        // For deep zooms, delta0 is tiny and shouldn't escape, but we haven't iterated yet
+        // Check escape after we've done at least one iteration
+        if (iter > 0) {
+            // Use GMP magnitude calculation and compare in GMP precision for accuracy
+            // This is critical - double conversion can lose precision for very large values
+            auto zMag2GMP = z.magnitudeSquared();
+            
+            // Compare in GMP precision first - this is the accurate check
+            bool escapedGMP = (zMag2GMP > escapeRadius2GMP);
+            
+            // Convert to double for fallback and logging
+            double zMag2 = zMag2GMP.toDouble();
         
-        // Check for rebasing
-        double deltaMag2 = delta.magnitudeSquaredDouble();
-        if (zMag2 < deltaMag2 * rebaseThreshold) {
-            delta = z;
-            refIter = 0;
-            usingLastRef = false;
-            continue;
+            debug(gmpdebug) {
+                import std.stdio;
+                static int debugCount = 0;
+                if (debugCount < 50 && iter < 20) {
+                    stderr.writeln("[ESCAPE DEBUG iter=", iter, "] zMag2GMP=", zMag2GMP.toString(), 
+                                  " escapeRadius2GMP=", escapeRadius2GMP.toString(),
+                                  " escapedGMP=", escapedGMP, " zMag2=", zMag2, 
+                                  " escapeRadius2=", escapeRadius2);
+                    stderr.flush();
+                    debugCount++;
+                }
+            }
+            
+            // Check for NaN or infinity
+            if (!(zMag2 == zMag2) || zMag2 == double.infinity || zMag2 < 0.0) {
+                // Value is too large or invalid - consider it escaped
+                debug(gmpdebug) {
+                    import std.stdio;
+                    stderr.writeln("[ESCAPE] NaN/Inf detected at iter=", iter, ", treating as escaped");
+                    stderr.flush();
+                }
+                double logZn = std.math.log(validEscapeRadius2 * 2.0) * 0.5;
+                double nu = std.math.log(logZn / std.math.log(2.0)) / std.math.log(2.0);
+                result.iterations = iter;
+                result.smoothed = 1 + cast(double)iter - nu;
+                result.glitched = false;
+                result.uncertain = false;
+                return result;
+            }
+            
+            // Check escape - use GMP comparison result, with double fallback for safety
+            // Use validEscapeRadius2 for the double comparison too
+            if (escapedGMP || zMag2 > validEscapeRadius2) {
+                // Temporary debug: print first few escapes to see what's happening
+                static int escapeCount = 0;
+                if (escapeCount < 10) {
+                    auto zRefMag2 = zRef.magnitudeSquared().toDouble();
+                    auto deltaMag2 = delta.magnitudeSquared().toDouble();
+                    stderr.writeln("[ESCAPE ", escapeCount, "] iter=", iter, " zMag2=", zMag2, 
+                                  " validEscapeRadius2=", validEscapeRadius2, " escapedGMP=", escapedGMP,
+                                  " zRefMag2=", zRefMag2, " deltaMag2=", deltaMag2,
+                                  " zMag2GMP=", zMag2GMP.toString());
+                    stderr.flush();
+                    escapeCount++;
+                }
+                double logZn = std.math.log(zMag2) * 0.5;
+                double nu = std.math.log(logZn / std.math.log(2.0)) / std.math.log(2.0);
+                result.iterations = iter;
+                result.smoothed = 1 + cast(double)iter - nu;
+                result.glitched = false;
+                result.uncertain = false;
+                return result;
+            }
+            
+            // Check for rebasing
+            double deltaMag2 = delta.magnitudeSquaredDouble();
+            if (zMag2 < deltaMag2 * rebaseThreshold) {
+                delta = z;
+                refIter = 0;
+                usingLastRef = false;
+                continue;
+            }
         }
         
         // Try BLA
+        double deltaMag2 = delta.magnitudeSquaredDouble();
         if (!usingLastRef && refIter + 1 < cast(int)maxRefIter && blaEntriesLength > 0) {
             int blaIdx = BLATable.findBestInEntries(blaEntriesArray, refIter, sqrt(deltaMag2));
             
@@ -739,6 +833,7 @@ PerturbResult perturbIterateBLAGMP(
                 const BLAEntry entry = blaEntriesArray[blaIdx];
                 
                 // Apply BLA: delta_new = A * delta + B * delta0
+                // Convert double to GMPComplex (double precision is sufficient for BLA coefficients)
                 GMPComplex A = GMPComplex(entry.A.re, entry.A.im);
                 GMPComplex B = GMPComplex(entry.B.re, entry.B.im);
                 

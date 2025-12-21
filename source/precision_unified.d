@@ -115,6 +115,12 @@ struct UnifiedComplex {
         _isMultiDouble = false;
         _isGMP = false;
         _isBigInt = false;
+
+        _double = Complex(0.0, 0.0);
+        _bigfloat = DDComplex(0.0, 0.0);
+        _multidouble = MultiDoubleComplex(2, 0.0, 0.0);
+        _gmp = GMPComplex.zero();
+        _bigintValue = BigFloatComplex("0", "0");
         
         final switch (method) {
             case PrecisionMethod.double_:
@@ -155,6 +161,12 @@ struct UnifiedComplex {
         _isMultiDouble = false;
         _isGMP = false;
         _isBigInt = false;
+
+        _double = Complex(0.0, 0.0);
+        _bigfloat = DDComplex(0.0, 0.0);
+        _multidouble = MultiDoubleComplex(2, 0.0, 0.0);
+        _gmp = GMPComplex.zero();
+        _bigintValue = BigFloatComplex("0", "0");
         
         final switch (method) {
             case PrecisionMethod.double_:
