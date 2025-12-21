@@ -31,10 +31,26 @@ struct IterResult {
     }
 }
 
+struct GMPFractalOptions {
+    bool hasIntegerPower;
+    uint integerPower;
+}
+
 enum FractalType { 
     mandelbrot, 
     multibrot, 
     ship 
+}
+
+GMPFractalOptions determineGMPFractalOptions(double exponent) {
+    import std.math : round, fabs;
+    GMPFractalOptions opts;
+    double rounded = round(exponent);
+    if (fabs(exponent - rounded) <= 1e-9 && rounded >= 2 && rounded <= uint.max) {
+        opts.hasIntegerPower = true;
+        opts.integerPower = cast(uint)rounded;
+    }
+    return opts;
 }
 
 enum ColorFunc {
@@ -310,6 +326,23 @@ IterResult iterateStandard(int px, int py, const ref RenderConfig cfg) {
                 zi = ci;
             }
         }
+    } else if (cfg.fractalType == FractalType.mandelbar) {
+        if (cfg.multibrotExp == 2.0) {
+            for (iter = 0; zr*zr + zi*zi <= escapeRadius && iter < cfg.maxIterations; iter++) {
+                zrTemp = zr*zr - zi*zi + cr;
+                zi = -2*zr*zi + ci;
+                zr = zrTemp;
+            }
+        } else {
+            real r;
+            for (iter = 0; zr*zr + zi*zi <= escapeRadius && iter < cfg.maxIterations; iter++) {
+                r = pow(zr*zr + zi*zi, cfg.multibrotExp/2);
+                auto theta = cfg.multibrotExp * atan2(-zi, zr);
+                zrTemp = r * cos(theta) + cr;
+                zi = r * sin(theta) + ci;
+                zr = zrTemp;
+            }
+        }
     } else if (cfg.fractalType == FractalType.ship) {
         for (iter = 0; zr*zr + zi*zi <= escapeRadius && iter < cfg.maxIterations; iter++) {
             zrTemp = zr*zr - zi*zi + cr;
@@ -342,82 +375,74 @@ IterResult iterateStandard(int px, int py, const ref RenderConfig cfg) {
 
 /// GMP-based arbitrary precision iteration
 IterResult iterateGMPDirect(int px, int py, const ref RenderConfig cfg, 
-                            const ref GMPPixelConverter converter) {
+                            const ref GMPPixelConverter converter,
+                            const GMPFractalOptions options) {
     const double escapeRadius2 = (1 << 16);
-    const double maxDoubleMag2 = 1e200;
+    auto c = converter.pixelToComplex(px, py);
+    auto z = GMPComplex.zero();
     
-    double zr = 0.0;
-    double zi = 0.0;
-    double cr = converter.originX.toDouble() + 
-                (converter.radius.toDouble() * ((cast(double)px / converter.minDim) * 2.0 - (1.0 + converter.di)));
-    double ci = converter.originY.toDouble() + 
-                (converter.radius.toDouble() * -((cast(double)py / converter.minDim) * 2.0 - (1.0 + converter.dr)));
-    
-    int escapeCheckInterval = 1;
-    if (cfg.maxIterations > 1000) {
-        if (cfg.maxIterations > 100000) {
-            escapeCheckInterval = 50;
-        } else if (cfg.maxIterations > 10000) {
-            escapeCheckInterval = 20;
-        } else if (cfg.maxIterations > 4000) {
-            escapeCheckInterval = 10;
-        } else {
-            escapeCheckInterval = 5;
-        }
-    }
-    
-    int iter;
-    bool usingGMP = false;
-    GMPComplex zGMP;
-    GMPComplex cGMP;
-    
-    for (iter = 0; iter < cfg.maxIterations; iter++) {
-        if (!usingGMP) {
-            double zrTemp = zr * zr - zi * zi + cr;
-            zi = 2.0 * zr * zi + ci;
-            zr = zrTemp;
-            
-            double mag2 = zr * zr + zi * zi;
-            
-            bool shouldSwitch = false;
-            if (mag2 > maxDoubleMag2) {
-                shouldSwitch = true;
-            } else if (iter >= 3500 && mag2 < escapeRadius2 && (cfg.maxIterations - iter) > 1000) {
-                shouldSwitch = true;
+    auto powComplexInt = (GMPComplex base, uint exponent) {
+        GMPComplex result = GMPComplex(GMPFloat(1.0), GMPFloat(0.0));
+        GMPComplex factor = base;
+        uint exp = exponent;
+        while (exp > 0) {
+            if (exp & 1) {
+                result = result * factor;
             }
-            
-            if (shouldSwitch) {
-                usingGMP = true;
-                zGMP = GMPComplex(zr, zi);
-                cGMP = converter.pixelToComplex(px, py);
-            } else {
-                if (iter % escapeCheckInterval == 0 || iter == cfg.maxIterations - 1) {
-                    if (mag2 > escapeRadius2) {
-                        double logZn = log(mag2) * 0.5;
-                        double nu = log(logZn / log(2.0)) / log(2.0);
-                        double smoothed = 1 + cast(double)iter - nu;
-                        return IterResult(iter, smoothed);
-                    }
+            exp >>= 1;
+            if (exp > 0) {
+                factor = factor * factor;
+            }
+        }
+        return result;
+    };
+
+    for (int iter = 0; iter < cfg.maxIterations; iter++) {
+        final switch (cfg.fractalType) {
+            case FractalType.mandelbrot: {
+                z.squareAndAdd(c);
+                break;
+            }
+            case FractalType.ship: {
+                auto zr2 = gmp_arb.sqr(z.re);
+                auto zi2 = gmp_arb.sqr(z.im);
+                auto two = GMPFloat(2.0);
+                auto zrIm = z.re * z.im * two;
+                auto ziAbs = gmp_arb.abs(zrIm);
+                z = GMPComplex(zr2 - zi2 + c.re, ziAbs + c.im);
+                break;
+            }
+            case FractalType.multibrot: {
+                uint power = options.integerPower > 0 ? options.integerPower : 2;
+                if (power <= 2) {
+                    z.squareAndAdd(c);
+                } else {
+                    auto raised = powComplexInt(z, power);
+                    z = raised + c;
                 }
-                continue;
+                break;
+            }
+            case FractalType.mandelbar: {
+                uint power = options.integerPower > 0 ? options.integerPower : 2;
+                auto conjZ = GMPComplex(z.re, -z.im);
+                auto raised = powComplexInt(conjZ, power);
+                z = raised + c;
+                break;
             }
         }
         
-        if (usingGMP) {
-            zGMP.squareAndAdd(cGMP);
-            
-            if (iter % (escapeCheckInterval * 2) == 0 || iter == cfg.maxIterations - 1) {
-                double mag2 = zGMP.magnitudeSquaredDouble();
-                if (mag2 > escapeRadius2) {
-                    double logZn = log(mag2) * 0.5;
-                    double nu = log(logZn / log(2.0)) / log(2.0);
-                    double smoothed = 1 + cast(double)iter - nu;
-                    return IterResult(iter, smoothed);
-                }
-            }
+        double mag2 = z.magnitudeSquaredDouble();
+        if (!mag2.isFinite) {
+            return IterResult(iter, cast(double)iter);
+        }
+        if (mag2 > escapeRadius2) {
+            double logZn = log(mag2) * 0.5;
+            double nu = log(logZn / log(2.0)) / log(2.0);
+            double smoothed = 1 + cast(double)iter - nu;
+            return IterResult(iter, smoothed);
         }
     }
-    
+
     return IterResult(cast(int)cfg.maxIterations, cast(double)cfg.maxIterations);
 }
 
