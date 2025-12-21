@@ -874,12 +874,14 @@ private void iterateGMPMode(ref IterResult[][] iters, const ref RenderConfig cfg
             double delta0Real = relX * desc.radius * 2.0;
             double delta0Imag = relY * desc.radius * 2.0;
             double deltaAbsSq = delta0Real * delta0Real + delta0Imag * delta0Imag;
+            import std.process : environment;
+            bool forceScaledEnv = "MANDEL_FORCE_SCALED" in environment;
             bool deltaTooSmallForDouble = (!isCenterPixel &&
                 precisionMethod != PrecisionMethod.bigint &&
                 (deltaAbsSq == 0.0 ||
                 deltaAbsSq < SCALED_DELTA_THRESHOLD_SQUARED ||
                 forceScaledDelta));
-            if (deltaTooSmallForDouble) {
+            if (deltaTooSmallForDouble || forceScaledEnv) {
                 useScaledDelta = true;
                 delta0 = Complex!double(relX * 2.0, relY * 2.0);
                 auto ePos = radiusHP.countUntil!(c => c == 'e' || c == 'E')();
@@ -934,7 +936,14 @@ private void iterateGMPMode(ref IterResult[][] iters, const ref RenderConfig cfg
 
                 auto runDoublePerturb = () {
                     PerturbResult res;
-                    if (useScaledDelta) {
+                    if (useScaledDelta && precisionMethod == PrecisionMethod.multidouble && numDoublesForMD > 0) {
+                        import perturbation_bla_hp : perturbIterateBLAMultiDoubleDelta;
+                        uint numDeltaDoubles = numDoublesForMD < 2 ? 2u : (numDoublesForMD < 4 ? numDoublesForMD : 4u);
+                        res = perturbIterateBLAMultiDoubleDelta(
+                            zRefArray, escapeRadius2, blaEntriesArray,
+                            delta0MD, desc.dwell, numDeltaDoubles
+                        );
+                    } else if (useScaledDelta) {
                         res = perturbIterateBLAScaledArrays(
                             zRefArray, escapeRadius2, blaEntriesArray,
                             delta0, delta0LogScale,
@@ -954,7 +963,15 @@ private void iterateGMPMode(ref IterResult[][] iters, const ref RenderConfig cfg
 
                 switch (precisionMethod) {
                     case PrecisionMethod.multidouble: {
-                        perturbResult = runDoublePerturb();
+                         if (zRefArrayMD.length > 0 && numDoublesForMD > 0) {
+                            import perturbation_bla_hp : perturbIterateBLAMultiDouble;
+                            perturbResult = perturbIterateBLAMultiDouble(
+                                zRefArrayMD, escapeRadius2, blaEntriesArray,
+                                delta0MD, desc.dwell, numDoublesForMD
+                            );
+                        } else {
+                            perturbResult = runDoublePerturb();
+                        }
                         handled = true;
                         break;
                     }
@@ -1092,6 +1109,8 @@ private void iterateGMPMode(ref IterResult[][] iters, const ref RenderConfig cfg
 
         if (uncertainCount > 0) {
             writeln("Second pass: Recomputing ", uncertainCount, " uncertain pixels with higher precision...");
+            int progressInterval2 = max(1, uncertainCount / 40);
+            int processedSecondPass = 0;
             if (precisionMethod == PrecisionMethod.multidouble &&
                 numDoublesForMD > 0 &&
                 zRefArrayMD.length > 0) {
@@ -1127,8 +1146,15 @@ private void iterateGMPMode(ref IterResult[][] iters, const ref RenderConfig cfg
                         iters[i][j] = IterResult(perturbResult.iterations, perturbResult.smoothed);
                         uncertainMask[i][j] = false;
                         recomputed++;
+                        processedSecondPass++;
+                        if (processedSecondPass % progressInterval2 == 0 || processedSecondPass == uncertainCount) {
+                            int pct = cast(int)((processedSecondPass * 100L) / uncertainCount);
+                            write(pct, "% ");
+                            stdout.flush();
+                        }
                     }
                 }
+                writeln();
                 writeln("Second pass (MultiDouble) recomputed ", recomputed, " pixels.");
             } else if (precisionMethod == PrecisionMethod.bigint && zRefArrayBF.length > 0) {
                 import perturbation_bla_hp : perturbIterateBLABigFloat;
@@ -1146,8 +1172,15 @@ private void iterateGMPMode(ref IterResult[][] iters, const ref RenderConfig cfg
                         iters[i][j] = IterResult(perturbResult.iterations, perturbResult.smoothed);
                         uncertainMask[i][j] = false;
                         recomputed++;
+                        processedSecondPass++;
+                        if (processedSecondPass % progressInterval2 == 0 || processedSecondPass == uncertainCount) {
+                            int pct = cast(int)((processedSecondPass * 100L) / uncertainCount);
+                            write(pct, "% ");
+                            stdout.flush();
+                        }
                     }
                 }
+                writeln();
                 writeln("Second pass (BigFloat) recomputed ", recomputed, " pixels.");
             } else if (precisionMethod == PrecisionMethod.gmp && zRefArrayGMP.length > 0) {
                 import perturbation_bla_hp : perturbIterateBLAGMP;
@@ -1163,8 +1196,15 @@ private void iterateGMPMode(ref IterResult[][] iters, const ref RenderConfig cfg
                         iters[i][j] = IterResult(perturbResult.iterations, perturbResult.smoothed);
                         uncertainMask[i][j] = false;
                         recomputed++;
+                        processedSecondPass++;
+                        if (processedSecondPass % progressInterval2 == 0 || processedSecondPass == uncertainCount) {
+                            int pct = cast(int)((processedSecondPass * 100L) / uncertainCount);
+                            write(pct, "% ");
+                            stdout.flush();
+                        }
                     }
                 }
+                writeln();
                 writeln("Second pass (GMP) recomputed ", recomputed, " pixels.");
             } else {
                 writeln("Second pass skipped: no higher precision method available.");
