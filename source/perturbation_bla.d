@@ -11,7 +11,8 @@ import std.typecons;
 import gmp_arb;
 import precision_unified : PrecisionMethod;
 import multidouble : MultiDoubleComplex, calculateNumDoubles;
-import bigfloat : DDComplex;
+import doubledouble : DDComplex, DoubleDouble;
+import bigfloat : BigFloatComplex;
 
 /**
  * Perturbation Theory with BLA (Bivariate Linear Approximation)
@@ -29,6 +30,12 @@ struct ReferenceOrbit {
     /// Z_ref values at each iteration (stored as double for fast access)
     Complex!double[] zRef;
     
+    /// High precision variants (optional)
+    DDComplex[] zRefDoubleDouble;
+    BigFloatComplex[] zRefBigFloat;
+    MultiDoubleComplex[] zRefMultiDouble;
+    GMPComplex[] zRefGMP;
+    
     /// Reference point C (high precision, for exact computation)
     GMPComplex cRef;
     
@@ -40,6 +47,12 @@ struct ReferenceOrbit {
     
     /// Escape radius squared
     double escapeRadius2 = (1 << 16);
+    
+    /// Method used for computation
+    PrecisionMethod methodUsed = PrecisionMethod.double_;
+    
+    /// Multi-double component count (if applicable)
+    uint multiDoubleComponents = 0;
 }
 
 /// BLA (Bivariate Linear Approximation) entry
@@ -50,6 +63,206 @@ struct BLAEntry {
     Complex!double A;   // Linear coefficient for z
     Complex!double B;   // Linear coefficient for c
     double radius;      // Validity radius R: valid when |z| < R
+    bool hasMultiDouble;              // High-precision coefficients available
+    MultiDoubleComplex A_multiDouble; // MultiDouble coefficient for z
+    MultiDoubleComplex B_multiDouble; // MultiDouble coefficient for c
+}
+
+ReferenceOrbit computeReferenceOrbit(string cRealStr, string cImagStr, uint maxIterations,
+                                     PrecisionMethod precisionMethod = PrecisionMethod.auto_) {
+    import std.datetime.stopwatch : StopWatch;
+    
+    ReferenceOrbit result;
+    result.methodUsed = precisionMethod;
+    
+    if (maxIterations == 0) {
+        writeln("ERROR: maxIterations is 0");
+        return result;
+    }
+    if (cRealStr.length == 0 || cImagStr.length == 0) {
+        writeln("ERROR: Empty coordinate strings");
+        return result;
+    }
+    
+    try {
+        result.cRef = GMPComplex(cRealStr, cImagStr);
+    } catch (Exception e) {
+        writeln("ERROR: Failed to create GMPComplex: ", e.msg);
+        return result;
+    }
+    
+    result.zRef.reserve(maxIterations + 1);
+    result.zRef ~= Complex!double(0, 0);
+    result.refIterations = cast(int)maxIterations;
+    const double escapeRadius2 = result.escapeRadius2;
+    
+    auto method = precisionMethod;
+    if (method == PrecisionMethod.auto_) {
+        method = PrecisionMethod.double_;
+    }
+    result.methodUsed = method;
+    
+    string methodName =
+        method == PrecisionMethod.double_ ? "double" :
+        method == PrecisionMethod.bigfloat ? "bigfloat" :
+        method == PrecisionMethod.multidouble ? "multidouble" :
+        method == PrecisionMethod.bigint ? "bigfloat (BigInt)" :
+        method == PrecisionMethod.gmp ? "gmp" :
+        "double";
+    writeln("Computing reference orbit using precision method: ", methodName);
+    write("Progress: ");
+    stdout.flush();
+    
+    StopWatch timer;
+    timer.start();
+    int progressInterval = max(1, cast(int)maxIterations / 80);
+    
+    switch (method) {
+        case PrecisionMethod.double_: {
+            double zr = 0.0;
+            double zi = 0.0;
+            double cr = result.cRef.re.toDouble();
+            double ci = result.cRef.im.toDouble();
+            for (uint iter = 0; iter < maxIterations; ++iter) {
+                double zrTemp = zr * zr - zi * zi + cr;
+                zi = 2.0 * zr * zi + ci;
+                zr = zrTemp;
+                result.zRef ~= Complex!double(zr, zi);
+                double mag2 = zr * zr + zi * zi;
+                if (!result.escaped && mag2 > escapeRadius2) {
+                    result.escaped = true;
+                    result.refIterations = cast(int)(iter + 1);
+                }
+                if (iter % progressInterval == 0) {
+                    write('.');
+                    stdout.flush();
+                }
+            }
+            break;
+        }
+        case PrecisionMethod.bigfloat: {
+            DDComplex cDD = DDComplex(DoubleDouble(cRealStr), DoubleDouble(cImagStr));
+            DDComplex zDD = DDComplex(0.0, 0.0);
+            result.zRefDoubleDouble.reserve(maxIterations + 1);
+            result.zRefDoubleDouble ~= zDD;
+            for (uint iter = 0; iter < maxIterations; ++iter) {
+                zDD = zDD.square() + cDD;
+                result.zRefDoubleDouble ~= zDD;
+                double zr = zDD.re.toDouble();
+                double zi = zDD.im.toDouble();
+                result.zRef ~= Complex!double(zr, zi);
+                double mag2 = zr * zr + zi * zi;
+                if (!result.escaped && mag2 > escapeRadius2) {
+                    result.escaped = true;
+                    result.refIterations = cast(int)(iter + 1);
+                }
+                if (iter % progressInterval == 0) {
+                    write('.');
+                    stdout.flush();
+                }
+            }
+            break;
+        }
+        case PrecisionMethod.multidouble: {
+            auto coordLen = max(cRealStr.length, cImagStr.length);
+            uint requiredDigits = cast(uint)max(50, coordLen + 20);
+            uint numDoubles = calculateNumDoubles(requiredDigits);
+            result.multiDoubleComponents = numDoubles;
+            auto cMD = MultiDoubleComplex(numDoubles, cRealStr, cImagStr);
+            auto zMD = MultiDoubleComplex(numDoubles, 0.0, 0.0);
+            result.zRefMultiDouble.reserve(maxIterations + 1);
+            result.zRefMultiDouble ~= zMD;
+            for (uint iter = 0; iter < maxIterations; ++iter) {
+                zMD.squareAndAdd(cMD);
+                result.zRefMultiDouble ~= zMD;
+                double zr = zMD.re.toDouble();
+                double zi = zMD.im.toDouble();
+                result.zRef ~= Complex!double(zr, zi);
+                double mag2 = zMD.magnitudeSquared();
+                if (!result.escaped && mag2 > escapeRadius2) {
+                    result.escaped = true;
+                    result.refIterations = cast(int)(iter + 1);
+                }
+                if (iter % progressInterval == 0) {
+                    write('.');
+                    stdout.flush();
+                }
+            }
+            break;
+        }
+        case PrecisionMethod.bigint: {
+            auto cBF = BigFloatComplex(cRealStr, cImagStr);
+            auto zBF = BigFloatComplex("0", "0");
+            result.zRefBigFloat.reserve(maxIterations + 1);
+            result.zRefBigFloat ~= zBF;
+            for (uint iter = 0; iter < maxIterations; ++iter) {
+                zBF.squareAndAdd(cBF);
+                result.zRefBigFloat ~= BigFloatComplex(zBF.re, zBF.im);
+                double zr = zBF.re.toDouble();
+                double zi = zBF.im.toDouble();
+                result.zRef ~= Complex!double(zr, zi);
+                double mag2 = zBF.magnitudeSquared().toDouble();
+                if (!result.escaped && mag2 > escapeRadius2) {
+                    result.escaped = true;
+                    result.refIterations = cast(int)(iter + 1);
+                }
+                if (iter % progressInterval == 0) {
+                    write('.');
+                    stdout.flush();
+                }
+            }
+            break;
+        }
+        case PrecisionMethod.gmp: {
+            auto cHigh = GMPComplex(cRealStr, cImagStr);
+            GMPComplex z = GMPComplex(0.0, 0.0);
+            result.zRefGMP.reserve(maxIterations + 1);
+            result.zRefGMP ~= z;
+            for (uint iter = 0; iter < maxIterations; ++iter) {
+                z.squareAndAdd(cHigh);
+                result.zRefGMP ~= z;
+                double zr = z.re.toDouble();
+                double zi = z.im.toDouble();
+                result.zRef ~= Complex!double(zr, zi);
+                double mag2 = z.magnitudeSquaredDouble();
+                if (!result.escaped && mag2 > escapeRadius2) {
+                    result.escaped = true;
+                    result.refIterations = cast(int)(iter + 1);
+                }
+                if (iter % progressInterval == 0) {
+                    write('.');
+                    stdout.flush();
+                }
+            }
+            break;
+        }
+        default: {
+            double zr = 0.0;
+            double zi = 0.0;
+            double cr = result.cRef.re.toDouble();
+            double ci = result.cRef.im.toDouble();
+            for (uint iter = 0; iter < maxIterations; ++iter) {
+                double zrTemp = zr * zr - zi * zi + cr;
+                zi = 2.0 * zr * zi + ci;
+                zr = zrTemp;
+                result.zRef ~= Complex!double(zr, zi);
+                double mag2 = zr * zr + zi * zi;
+                if (!result.escaped && mag2 > escapeRadius2) {
+                    result.escaped = true;
+                    result.refIterations = cast(int)(iter + 1);
+                }
+                if (iter % progressInterval == 0) {
+                    write('.');
+                    stdout.flush();
+                }
+            }
+            break;
+        }
+    }
+    
+    writeln();
+    writeln("Reference orbit computed in ", timer.peek().total!"seconds", " s");
+    return result;
 }
 
 /// BLA table: collection of approximations
@@ -72,7 +285,6 @@ struct BLATable {
         
         // Iterate with explicit bounds checking
         for (size_t i = 0; i < entriesLen; i++) {
-            // Copy entry to avoid potential issues with parallel access
             const BLAEntry entry = entriesArray[i];
             if (entry.startIter == m && zMag < entry.radius) {
                 if (entry.skipCount > bestSkip) {
@@ -81,361 +293,32 @@ struct BLATable {
                 }
             }
         }
-        
         return bestIdx;
     }
-}
-
-/// Compute reference orbit at high precision
-/// Uses unified precision system - can use double, bigfloat, or GMP
-/// This is done ONCE per image
-ReferenceOrbit computeReferenceOrbit(string cRealStr, string cImagStr, uint maxIterations, 
-                                     PrecisionMethod precisionMethod = PrecisionMethod.auto_) {
-    import precision_unified : PrecisionMethod, UnifiedComplex, createUnifiedComplex, selectPrecisionMethod;
-    import std.datetime.stopwatch : StopWatch, AutoStart;
-    
-    ReferenceOrbit result;
-    
-    // Validate inputs
-    if (maxIterations == 0) {
-        writeln("ERROR: maxIterations is 0");
-        return result;
-    }
-    
-    if (cRealStr.length == 0 || cImagStr.length == 0) {
-        writeln("ERROR: Empty coordinate strings");
-        return result;
-    }
-    
-    // Try to create GMPComplex - catch any errors
-    try {
-        result.cRef = GMPComplex(cRealStr, cImagStr);
-    } catch (Exception e) {
-        writeln("ERROR: Failed to create GMPComplex: ", e.msg);
-        return result;
-    }
-    
-    // Validate GMPComplex was created successfully
-    try {
-        double testRe = result.cRef.re.toDouble();
-        double testIm = result.cRef.im.toDouble();
-        // Debug output removed for production
-    } catch (Exception e) {
-        writeln("ERROR: Failed to convert GMPComplex to double: ", e.msg);
-        return result;
-    }
-    
-    result.zRef.reserve(maxIterations + 1);
-    
-    // Store initial Z_ref = 0
-    result.zRef ~= Complex!double(0, 0);
-    
-    // Ensure we have at least one point
-    if (result.zRef.length == 0) {
-        writeln("ERROR: Failed to initialize reference orbit");
-        return result;
-    }
-    
-    const double escapeRadius2 = result.escapeRadius2;
-    const double maxDoubleMag2 = 1e200;  // Switch to higher precision when values get this large
-    
-    // Determine required digits for multidouble if needed
-    uint requiredDigits = 0;
-    if (precisionMethod == PrecisionMethod.multidouble) {
-        auto coordLen = max(cRealStr.length, cImagStr.length);
-        requiredDigits = cast(uint)max(50, coordLen + 20);
-    }
-    
-    // Initialize precision-specific variables
-    double zr = 0.0;
-    double zi = 0.0;
-    double cr, ci;
-    DDComplex zDD, cDD;
-    MultiDoubleComplex zMD, cMD;
-    bool usingBigFloat = (precisionMethod == PrecisionMethod.bigfloat);
-    bool usingMultiDouble = (precisionMethod == PrecisionMethod.multidouble);
-    
-    if (usingBigFloat) {
-        try {
-            cr = result.cRef.re.toDouble();
-            ci = result.cRef.im.toDouble();
-            cDD = DDComplex(cr, ci);
-            zDD = DDComplex(0.0, 0.0);
-        } catch (Exception e) {
-            writeln("ERROR: Failed to initialize bigfloat: ", e.msg);
-            return result;
-        }
-    } else if (usingMultiDouble) {
-        try {
-            cr = result.cRef.re.toDouble();
-            ci = result.cRef.im.toDouble();
-            uint numDoubles = calculateNumDoubles(requiredDigits);
-            cMD = MultiDoubleComplex(numDoubles, cr, ci);
-            zMD = MultiDoubleComplex(numDoubles, 0.0, 0.0);
-        } catch (Exception e) {
-            writeln("ERROR: Failed to initialize multidouble: ", e.msg);
-            return result;
-        }
-    } else {
-        // Standard double precision
-        try {
-            cr = result.cRef.re.toDouble();
-            ci = result.cRef.im.toDouble();
-        } catch (Exception e) {
-            writeln("ERROR: Failed to convert cRef to double: ", e.msg);
-            return result;
-        }
-    }
-    
-    writeln("Computing reference orbit using precision method: ", 
-            precisionMethod == PrecisionMethod.double_ ? "double" :
-            precisionMethod == PrecisionMethod.bigfloat ? "bigfloat" :
-            precisionMethod == PrecisionMethod.multidouble ? "multidouble" :
-            precisionMethod == PrecisionMethod.gmp ? "gmp" : "auto");
-    write("Progress: ");
-    stdout.flush();
-    
-    int iter;
-    int progressInterval = max(1, cast(int)maxIterations / 50);  // More frequent updates
-    int lastPercent = -1;
-    bool usingGMP = false;
-    GMPComplex zGMP;
-    StopWatch timer;
-    timer.start();
-    auto lastTime = timer.peek();
-    
-    // Synchronize progress output to prevent thread interference
-    import core.sync.mutex : Mutex;
-    static Mutex progressMutex;
-    static shared bool mutexInitialized = false;
-    synchronized {
-        if (!mutexInitialized) {
-            progressMutex = new Mutex();
-            mutexInitialized = true;
-        }
-    }
-    
-    // Track if we've escaped to optimize post-escape computation
-    bool hasEscaped = false;
-    
-    for (iter = 0; iter < maxIterations; iter++) {
-        // Iterate using selected precision method
-        if (usingBigFloat) {
-            // BigFloat (double-double) iteration
-            zDD = zDD.square() + cDD;
-            double zrDD = zDD.re.toDouble();
-            double ziDD = zDD.im.toDouble();
-            double mag2 = zrDD * zrDD + ziDD * ziDD;
-            result.zRef ~= Complex!double(zrDD, ziDD);
-            
-            if (mag2 > escapeRadius2 && !result.escaped) {
-                result.escaped = true;
-                result.refIterations = iter + 1;
-                hasEscaped = true;
-            }
-            
-            // Check if we need to switch to GMP (only if precisionMethod is gmp)
-            bool shouldSwitch = mag2 > maxDoubleMag2 || (iter > 5000 && mag2 < escapeRadius2 && (maxIterations - iter) > 2000);
-            if (shouldSwitch && precisionMethod == PrecisionMethod.gmp) {
-                usingGMP = true;
-                try {
-                    zGMP = GMPComplex(zrDD, ziDD);
-                    writeln("\nSwitching to GMP at iteration ", iter);
-                    write("GMP Progress: ");
-                    stdout.flush();
-                } catch (Exception e) {
-                    writeln("\nERROR: Failed to switch to GMP: ", e.msg);
-                    usingGMP = false;
-                }
-            }
-        } else if (usingMultiDouble) {
-            // MultiDouble iteration
-            zMD.squareAndAdd(cMD);
-            double mag2 = zMD.magnitudeSquared();  // Use full precision magnitude squared
-            double zrMD = zMD.re.toDouble();
-            double ziMD = zMD.im.toDouble();
-            result.zRef ~= Complex!double(zrMD, ziMD);
-            
-            if (mag2 > escapeRadius2 && !result.escaped) {
-                result.escaped = true;
-                result.refIterations = iter + 1;
-                hasEscaped = true;
-            }
-            
-            // Check if we need to switch to GMP (only if precisionMethod is gmp)
-            bool shouldSwitch = mag2 > maxDoubleMag2 || (iter > 5000 && mag2 < escapeRadius2 && (maxIterations - iter) > 2000);
-            if (shouldSwitch && precisionMethod == PrecisionMethod.gmp) {
-                usingGMP = true;
-                try {
-                    zGMP = GMPComplex(zrMD, ziMD);
-                    writeln("\nSwitching to GMP at iteration ", iter);
-                    write("GMP Progress: ");
-                    stdout.flush();
-                } catch (Exception e) {
-                    writeln("\nERROR: Failed to switch to GMP: ", e.msg);
-                    usingGMP = false;
-                }
-            }
-        } else if (!usingGMP) {
-            // Fast double precision iteration
-            double zrTemp = zr * zr - zi * zi + cr;
-            zi = 2.0 * zr * zi + ci;
-            zr = zrTemp;
-            
-            double mag2 = zr * zr + zi * zi;
-            
-            // Store as double
-            result.zRef ~= Complex!double(zr, zi);
-            
-            // Check escape - but continue computing even after escape
-            // This is important for perturbation: we need the full reference orbit
-            // even if it escapes, so we can accurately compute pixel variations
-            if (mag2 > escapeRadius2 && !result.escaped) {
-                result.escaped = true;
-                result.refIterations = iter + 1;
-                hasEscaped = true;
-                // Don't break - continue computing to maxIterations
-                // This ensures we have the full reference orbit for perturbation
-            }
-            
-            // Switch to higher precision if magnitude is huge or deep iteration
-            // CRITICAL: Only switch to GMP if precisionMethod is explicitly GMP
-            // If precisionMethod is bigfloat or double, NEVER switch to GMP (respect user's choice)
-            bool shouldSwitch = mag2 > maxDoubleMag2 || (iter > 5000 && mag2 < escapeRadius2 && (maxIterations - iter) > 2000);
-            
-            // ONLY switch to GMP if precisionMethod is explicitly GMP (not bigfloat, not double, not auto that selected bigfloat)
-            if (shouldSwitch && precisionMethod == PrecisionMethod.gmp) {
-                usingGMP = true;
-                try {
-                    zGMP = GMPComplex(zr, zi);
-                    writeln("\nSwitching to GMP at iteration ", iter);
-                    write("GMP Progress: ");
-                    stdout.flush();
-                } catch (Exception e) {
-                    writeln("\nERROR: Failed to switch to GMP at iteration ", iter, ": ", e.msg);
-                    writeln("Continuing with double precision (may lose precision)");
-                    usingGMP = false;
-                }
-            }
-            // If precisionMethod is bigfloat or double, we NEVER switch - stay with double precision
-            // This respects the user's forced precision choice
-        } else {
-            // GMP iteration (slower, but necessary for precision)
-            // Note: If precisionMethod is bigfloat, we should use bigfloat here, but for now use GMP
-            try {
-                zGMP.squareAndAdd(result.cRef);
-                
-                // Store every point - we need the full orbit for perturbation
-                // CRITICAL: After escape, we still need to store the actual values
-                // because scaled delta iteration needs to check if reference has escaped
-                double zrGMP, ziGMP;
-                try {
-                    zrGMP = zGMP.re.toDouble();
-                    ziGMP = zGMP.im.toDouble();
-                } catch (Exception e) {
-                    writeln("\nERROR: Failed to convert GMP to double at iteration ", iter, ": ", e.msg);
-                    break;
-                }
-                result.zRef ~= Complex!double(zrGMP, ziGMP);
-            } catch (Exception e) {
-                writeln("\nERROR: GMP iteration failed at iteration ", iter, ": ", e.msg);
-                break;  // Can't continue
-            }
-            
-            // AGGRESSIVE OPTIMIZATION: Check escape much less frequently after escape
-            // Before escape: check every 10 iterations (need to know when it escapes)
-            // After escape: check every 500 iterations (just to confirm, no action needed)
-            int checkInterval = result.escaped ? 500 : 10;
-            if (iter % checkInterval == 0 || iter == maxIterations - 1) {
-                // Use a fast magnitude check that avoids toDouble() when possible
-                // For escaped orbits, we can skip the check entirely
-                if (!result.escaped) {
-                    double mag2 = zGMP.magnitudeSquaredDouble();
-                    if (mag2 > escapeRadius2) {
-                        result.escaped = true;
-                        result.refIterations = iter + 1;
-                        hasEscaped = true;
-                        writeln("\nReference escaped at iteration ", iter + 1, " (continuing to ", maxIterations, ")");
-                        write("Progress: ");
-                        stdout.flush();
-                        // Don't break - continue to maxIterations
-                    }
-                }
-            }
-        }
-        
-        // Progress indication with time estimates (synchronized to prevent thread interference)
-        if (iter % progressInterval == 0 || iter == maxIterations - 1) {
-            // Use long to prevent integer overflow
-            long percent = (cast(long)iter * 100L) / cast(long)maxIterations;
-            synchronized (progressMutex) {
-                // Check inside synchronized block to prevent race conditions
-                if (percent != lastPercent && percent >= 0 && percent <= 100) {
-                    auto currentTime = timer.peek();
-                    auto elapsed = currentTime - lastTime;
-                    
-                    if (elapsed.total!"msecs" > 1000) {  // Only show time if > 1 second
-                        write(cast(int)percent, "% ");
-                        stdout.flush();
-                        lastTime = currentTime;
-                    } else {
-                        write(cast(int)percent, "% ");
-                        stdout.flush();
-                    }
-                    lastPercent = cast(int)percent;
-                }
-            }
-        }
-    }
-    
-    timer.stop();
-    
-    if (!result.escaped) {
-        result.refIterations = cast(int)maxIterations;
-    }
-    
-    // Validate that we have enough points for perturbation
-    if (result.zRef.length < 2) {
-        writeln("WARNING: Reference orbit has only ", result.zRef.length, " point(s), need at least 2");
-    }
-    
-    writeln();  // New line after progress
-    writeln("Reference orbit computed: ", result.refIterations, " iterations (", 
-            result.zRef.length, " points) in ", timer.peek().total!"seconds", " seconds");
-    
-    return result;
 }
 
 /// Compute single-step BLA coefficients
 /// For iteration n: z_{n+1} = A_{n,1} * z_n + B_{n,1} * c
 /// Valid when |z_n| << |2 * Z_n|
 BLAEntry computeSingleStepBLA(const ref ReferenceOrbit ref_, int n) {
-    // Cache length for thread safety
     const size_t zRefLen = ref_.zRef.length;
-    
-    // Bounds check to prevent segfault
     if (n < 0 || n >= cast(int)zRefLen - 1) {
-        // Can't compute BLA for invalid or last iteration
         BLAEntry entry;
         entry.startIter = n;
         entry.skipCount = 0;
         entry.A = Complex!double(1, 0);
         entry.B = Complex!double(0, 0);
         entry.radius = 0;
+        entry.hasMultiDouble = false;
         return entry;
     }
     
-    // A_{n,1} = 2 * Z_n
-    // B_{n,1} = 1
-    // Double-check bounds before access
     if (n >= 0 && n < cast(int)zRefLen) {
         auto Z_n = ref_.zRef[n];
         auto A = Z_n * 2.0;
         auto B = Complex!double(1, 0);
         
-        // Validity radius: R = ε * |A| - |B| * |c| / |A|
-        // Simplified: R = ε * |A| (assuming c is small)
-        const double epsilon = 1e-10;  // Negligibility threshold
+        const double epsilon = 1e-10;
         double A_mag = sqrt(A.re * A.re + A.im * A.im);
         double radius = epsilon * A_mag;
         
@@ -445,16 +328,23 @@ BLAEntry computeSingleStepBLA(const ref ReferenceOrbit ref_, int n) {
         entry.A = A;
         entry.B = B;
         entry.radius = radius;
-        
+        entry.hasMultiDouble = false;
+        if (ref_.zRefMultiDouble.length > n && ref_.multiDoubleComponents > 0) {
+            auto Z_md = ref_.zRefMultiDouble[n];
+            auto twoMD = MultiDoubleComplex(ref_.multiDoubleComponents, 2.0, 0.0);
+            entry.A_multiDouble = Z_md * twoMD;
+            entry.B_multiDouble = MultiDoubleComplex(ref_.multiDoubleComponents, 1.0, 0.0);
+            entry.hasMultiDouble = true;
+        }
         return entry;
     } else {
-        // Fallback for safety
         BLAEntry entry;
         entry.startIter = n;
         entry.skipCount = 0;
         entry.A = Complex!double(1, 0);
         entry.B = Complex!double(0, 0);
         entry.radius = 0;
+        entry.hasMultiDouble = false;
         return entry;
     }
 }
@@ -463,17 +353,11 @@ BLAEntry computeSingleStepBLA(const ref ReferenceOrbit ref_, int n) {
 /// If T_x skips l_x from m_x and T_y skips l_y from m_x + l_x,
 /// then T_z = T_y ∘ T_x skips l_x + l_y from m_x
 BLAEntry mergeBLA(const ref BLAEntry x, const ref BLAEntry y) {
-    // A_z = A_y * A_x
-    // B_z = A_y * B_x + B_y
-    // R_z = min(R_x, (R_y - |B_x| * |c|) / |A_x|)
-    
     auto A_z = y.A * x.A;
     auto B_z = y.A * x.B + y.B;
-    
-    // Simplified radius calculation (assuming c is small)
     double A_x_mag = sqrt(x.A.re * x.A.re + x.A.im * x.A.im);
-    double radius_z = min(x.radius, y.radius / A_x_mag);
-    radius_z = max(0.0, radius_z);  // Ensure non-negative
+    double radius_z = min(x.radius, y.radius / max(A_x_mag, 1e-12));
+    radius_z = max(0.0, radius_z);
     
     BLAEntry entry;
     entry.startIter = x.startIter;
@@ -481,21 +365,17 @@ BLAEntry mergeBLA(const ref BLAEntry x, const ref BLAEntry y) {
     entry.A = A_z;
     entry.B = B_z;
     entry.radius = radius_z;
-    
+    entry.hasMultiDouble = x.hasMultiDouble && y.hasMultiDouble;
+    if (entry.hasMultiDouble) {
+        entry.A_multiDouble = y.A_multiDouble * x.A_multiDouble;
+        entry.B_multiDouble = y.A_multiDouble * x.B_multiDouble + y.B_multiDouble;
+    }
     return entry;
 }
 
-/// Build BLA table from reference orbit
-/// BLA (Bivariate Linear Approximation) creates linear approximations of the iteration function
-/// that allow skipping many iterations during perturbation. This table is built once and reused
-/// for all pixels, dramatically speeding up deep zoom rendering.
-/// 
-/// Creates O(M) entries using hierarchical merging:
-/// - Step 1: Create M single-step BLAs in parallel (each is independent)
-/// - Step 2: Hierarchically merge consecutive BLAs to create longer skip sequences
-/// 
-/// The merging step is sequential due to dependencies, which is why it can take a while
-/// for very long reference orbits (millions of iterations).
+/// Compute reference orbit at high precision
+/// Uses unified precision system - can use double, bigfloat, or GMP
+/// This is done ONCE per image
 BLATable buildBLATable(const ref ReferenceOrbit ref_) {
     import std.parallelism;
     import std.datetime.stopwatch : StopWatch, AutoStart;
@@ -683,6 +563,10 @@ PerturbResult perturbIterateBLASafe(
     
     const double escapeRadius2 = ref_.escapeRadius2;
     const double rebaseThreshold = 1e-10;  // Threshold for rebasing
+    int rebaseCount = 0;
+    bool glitchDetected = false;
+    double delta0Mag2 = delta0.re * delta0.re + delta0.im * delta0.im;
+    bool deltaTooSmall = delta0Mag2 < 1e-30;
     
     auto delta = delta0;
     int iter = 0;
@@ -716,12 +600,25 @@ PerturbResult perturbIterateBLASafe(
         auto z = zRef + delta;
         double zMag2 = z.re * z.re + z.im * z.im;
         double deltaMag2 = delta.re * delta.re + delta.im * delta.im;
+
+        if (!(zMag2 == zMag2) || zMag2 == double.infinity || zMag2 < 0.0) {
+            result.iterations = iter;
+            result.smoothed = cast(double)iter;
+            result.glitched = true;
+            result.uncertain = true;
+            return result;
+        }
         
         if (zMag2 < deltaMag2 * rebaseThreshold) {
             // Rebase: replace delta with Z_ref + delta, reset refIter to 0
             delta = z;
             refIter = 0;
             usingLastRef = false;  // Reset flag after rebasing
+            rebaseCount++;
+            if (rebaseCount > 8) {
+                glitchDetected = true;
+                break;
+            }
             // Bounds check after rebasing
             if (refIter >= cast(int)maxRefIter) {
                 break;
@@ -734,6 +631,11 @@ PerturbResult perturbIterateBLASafe(
             z = newZRef + delta;
             zMag2 = z.re * z.re + z.im * z.im;
         }
+
+        if (deltaMag2 > escapeRadius2 * 1e6) {
+            glitchDetected = true;
+            break;
+        }
         
         // Check escape
         if (zMag2 > escapeRadius2) {
@@ -742,6 +644,7 @@ PerturbResult perturbIterateBLASafe(
             result.iterations = iter;
             result.smoothed = 1 + cast(double)iter - nu;
             result.glitched = false;
+            result.uncertain = false;
             return result;
         }
         
@@ -749,10 +652,7 @@ PerturbResult perturbIterateBLASafe(
         bool useBLA = true;  // Re-enable BLA now that we've fixed the threading issue
         if (useBLA && !usingLastRef && refIter + 1 < cast(int)maxRefIter && blaEntriesLength > 0) {
             double deltaMag = sqrt(deltaMag2);
-            // Create local BLATable wrapper for findBest
-            BLATable localBLATable;
-            localBLATable.entries = blaEntries.dup;  // Duplicate to avoid const issue
-            int blaIdx = localBLATable.findBest(refIter, deltaMag);
+            int blaIdx = BLATable.findBestInEntries(blaEntries, refIter, deltaMag);
             
             // Double-check bounds before accessing
             if (blaIdx >= 0 && blaIdx < cast(int)blaEntriesLength) {
@@ -809,7 +709,8 @@ PerturbResult perturbIterateBLASafe(
     // Didn't escape
     result.iterations = iter;
     result.smoothed = cast(double)iter;
-    result.glitched = false;
+    result.glitched = glitchDetected;
+    result.uncertain = glitchDetected || deltaTooSmall || usingLastRef;
     return result;
 }
 
@@ -837,6 +738,8 @@ PerturbResult perturbIterateBLAArrays(
     }
     
     const double rebaseThreshold = 1e-10;
+    int rebaseCount = 0;
+    bool glitchDetected = false;
     
     // Check if delta0 is too small - this indicates precision issues
     double delta0Mag2 = delta0.re * delta0.re + delta0.im * delta0.im;
@@ -866,10 +769,23 @@ PerturbResult perturbIterateBLAArrays(
         double zMag2 = z.re * z.re + z.im * z.im;
         double deltaMag2 = delta.re * delta.re + delta.im * delta.im;
         
+        if (!(zMag2 == zMag2) || zMag2 == double.infinity || zMag2 < 0.0) {
+            result.iterations = iter;
+            result.smoothed = cast(double)iter;
+            result.glitched = true;
+            result.uncertain = true;
+            return result;
+        }
+        
         if (zMag2 < deltaMag2 * rebaseThreshold) {
             delta = z;
             refIter = 0;
             usingLastRef = false;
+            rebaseCount++;
+            if (rebaseCount > 8) {
+                glitchDetected = true;
+                break;
+            }
             if (refIter >= cast(int)maxRefIter) {
                 break;
             }
@@ -881,49 +797,48 @@ PerturbResult perturbIterateBLAArrays(
             zMag2 = z.re * z.re + z.im * z.im;
         }
         
+        if (deltaMag2 > escapeRadius2 * 1e6) {
+            glitchDetected = true;
+            break;
+        }
+        
         if (zMag2 > escapeRadius2) {
             double logZn = log(zMag2) * 0.5;
             double nu = log(logZn / log(2.0)) / log(2.0);
             result.iterations = iter;
             result.smoothed = 1 + cast(double)iter - nu;
             result.glitched = false;
+            result.uncertain = false;
             return result;
         }
         
+        bool usedBLA = false;
         if (!usingLastRef && refIter + 1 < cast(int)maxRefIter && blaEntriesLength > 0) {
             double deltaMag = sqrt(deltaMag2);
             int blaIdx = BLATable.findBestInEntries(blaEntriesArray, refIter, deltaMag);
             
             if (blaIdx >= 0 && blaIdx < cast(int)blaEntriesLength) {
                 const BLAEntry entry = blaEntriesArray[blaIdx];
-                
-                delta = entry.A * delta + entry.B * delta0;
-                
-                iter += entry.skipCount;
-                refIter += entry.skipCount;
-                
-                if (refIter >= cast(int)maxRefIter) {
-                    refIter = cast(int)maxRefIter - 1;
-                    usingLastRef = true;
-                }
-            } else {
-                if (refIter < 0 || refIter >= cast(int)maxRefIter) {
-                    break;
-                }
-                Complex!double currentZRef = zRefArray[refIter];
-                auto twoZref = currentZRef * 2.0;
-                delta = (twoZref + delta) * delta + delta0;
-                
-                iter++;
-                if (!usingLastRef) {
-                    refIter++;
-                    if (refIter >= cast(int)maxRefIter) {
-                        refIter = cast(int)maxRefIter - 1;
-                        usingLastRef = true;
+                double radius = entry.radius;
+                if (radius > 0 && deltaMag < radius) {
+                    auto nextDelta = entry.A * delta + entry.B * delta0;
+                    double nextMag2 = nextDelta.re * nextDelta.re + nextDelta.im * nextDelta.im;
+                    if (nextMag2 == nextMag2 && nextMag2 != double.infinity &&
+                        nextMag2 < radius * radius * 4) {
+                        delta = nextDelta;
+                        iter += entry.skipCount;
+                        refIter += entry.skipCount;
+                        if (refIter >= cast(int)maxRefIter) {
+                            refIter = cast(int)maxRefIter - 1;
+                            usingLastRef = true;
+                        }
+                        usedBLA = true;
                     }
                 }
             }
-        } else {
+        }
+
+        if (!usedBLA) {
             if (refIter < 0 || refIter >= cast(int)maxRefIter) {
                 break;
             }
@@ -932,13 +847,98 @@ PerturbResult perturbIterateBLAArrays(
             delta = (twoZref + delta) * delta + delta0;
             
             iter++;
+            if (!usingLastRef) {
+                refIter++;
+                if (refIter >= cast(int)maxRefIter) {
+                    refIter = cast(int)maxRefIter - 1;
+                    usingLastRef = true;
+                }
+            }
         }
     }
     
     result.iterations = iter;
     result.smoothed = cast(double)iter;
-    result.glitched = false;
+    result.glitched = glitchDetected;
+    result.uncertain = glitchDetected || deltaTooSmall || usingLastRef;
     return result;
+}
+
+private double pow10Clamped(double logVal) {
+    // Clamp exponent to the finite range of double precision. Use zeros for
+    // extreme underflow and the maximum finite value for overflow so the caller
+    // can detect unusable scales.
+    enum double MIN_LOG10 = -308.0;
+    enum double MAX_LOG10 = 308.0;
+    if (logVal < MIN_LOG10) {
+        return 0.0;
+    }
+    if (logVal > MAX_LOG10) {
+        return double.max;
+    }
+    return pow(10.0, logVal);
+}
+
+private void renormalizeScaledDelta(ref Complex!double delta,
+                                    ref double currentLogScale,
+                                    ref double currentScale) {
+    // Keep the normalized delta in a numerically stable range by tracking the
+    // implicit scale separately. This mirrors the rescale trick from the deep
+    // zoom perturbation write-ups: we nudge the mantissa back toward 1 while
+    // adjusting the log scale in powers of 10^100.
+    enum double SCALE_STEP = 100.0;
+    enum double MAX_NORM = 1e100;
+    enum double MIN_NORM = 1e-100;
+    enum double MAX_NORM2 = MAX_NORM * MAX_NORM;
+    enum double MIN_NORM2 = MIN_NORM * MIN_NORM;
+
+    double mag2 = delta.re * delta.re + delta.im * delta.im;
+
+    while (mag2 > MAX_NORM2 && mag2 == mag2 && mag2 != double.infinity) {
+        delta = Complex!double(delta.re * MIN_NORM, delta.im * MIN_NORM);
+        currentLogScale += SCALE_STEP;
+        currentScale = pow10Clamped(currentLogScale);
+        mag2 = delta.re * delta.re + delta.im * delta.im;
+    }
+
+    while (mag2 > 0.0 && mag2 < MIN_NORM2) {
+        delta = Complex!double(delta.re * MAX_NORM, delta.im * MAX_NORM);
+        currentLogScale -= SCALE_STEP;
+        currentScale = pow10Clamped(currentLogScale);
+        mag2 = delta.re * delta.re + delta.im * delta.im;
+    }
+}
+
+private void addScaledTerm(ref Complex!double accum,
+                           ref double accumLogScale,
+                           ref double accumScale,
+                           Complex!double value,
+                           double valueLogScale) {
+    // Combine two scaled complex values while keeping their mantissas in a
+    // stable range. We bound the log-difference so we never request pow10 with
+    // exponents that under/overflow, and fall back to the dominant term when
+    // magnitudes differ wildly.
+    enum double MAX_LOG_DIFF = 256.0;
+    double diff = valueLogScale - accumLogScale;
+    if (diff > MAX_LOG_DIFF) {
+        accum = value;
+        accumLogScale = valueLogScale;
+        accumScale = pow10Clamped(accumLogScale);
+        renormalizeScaledDelta(accum, accumLogScale, accumScale);
+        return;
+    }
+    if (diff < -MAX_LOG_DIFF) {
+        return; // value is negligible compared to accum
+    }
+    double factor = pow10Clamped(diff);
+    if (factor == 0.0) {
+        return;
+    }
+    accum = Complex!double(
+        accum.re + value.re * factor,
+        accum.im + value.im * factor
+    );
+    renormalizeScaledDelta(accum, accumLogScale, accumScale);
 }
 
 /// Scaled delta iteration with BLA support for extreme zooms
@@ -947,13 +947,17 @@ PerturbResult perturbIterateBLAScaledArrays(
     const Complex!double[] zRefArray,
     const double escapeRadius2,
     const BLAEntry[] blaEntriesArray,
-    Complex!double delta0Normalized,  // Normalized delta (in range [-2, 2])
-    double delta0LogScale,  // log10 of the actual scale factor (e.g., -20 for 1e-20)
-    uint maxIterations,
-    int refEscapeIteration = -1  // Iteration at which reference escaped (-1 if didn't escape)
+    Complex!double delta0Normalized,
+    double delta0LogScale,
+    Complex!double delta0Actual,
+    uint maxIterations
 ) {
     PerturbResult result;
-    
+    bool forcedApproximation = false;
+    enum int MAX_SCALED_BLA_SKIP = 32;
+    import std.process : environment;
+    import std.string : format;
+    bool tracePixel = "MANDEL_TRACE_PIXEL" in environment;
     const size_t zRefLength = zRefArray.length;
     const size_t blaEntriesLength = blaEntriesArray.length;
     
@@ -966,30 +970,21 @@ PerturbResult perturbIterateBLAScaledArrays(
     }
     
     const double rebaseThreshold = 1e-10;
-    
-    // Check if we're in scaled mode - this indicates extreme precision issues
-    // If logScale is very negative, we're dealing with extremely tiny deltas
-    bool deltaTooSmall = delta0LogScale < -20;  // Very negative log scale indicates precision loss
-    
-    // Work with scaled coordinates: actual_delta = delta_normalized * 10^logScale
+    const double logRebaseThreshold = std.math.log10(rebaseThreshold);
     auto delta = delta0Normalized;
-    auto delta0 = delta0Normalized;
+    const Complex!double delta0Norm = delta0Normalized;
+    const Complex!double delta0Exact = delta0Actual;
     double currentLogScale = delta0LogScale;
+    double currentScale = pow10Clamped(currentLogScale);
+    renormalizeScaledDelta(delta, currentLogScale, currentScale);
+    int lastRebaseIter = -1000000;
     
     int iter = 0;
     int refIter = 0;
     size_t maxRefIter = zRefLength;
     bool usingLastRef = false;
     
-    // Convert escape iteration from 1-indexed to 0-indexed
-    // refEscapeIteration is 1-indexed (iter + 1), but refIter is 0-indexed
-    int refEscapeIndex = refEscapeIteration >= 0 ? refEscapeIteration - 1 : -1;
-    
     while (iter < maxIterations) {
-        // Don't automatically mark pixels as escaped just because reference escaped
-        // At extreme zooms, delta can be significant enough to keep pixels in the set
-        // We'll compute the actual pixel value and check escape based on that
-        
         if (refIter >= cast(int)maxRefIter) {
             if (maxRefIter == 0) {
                 break;
@@ -1002,72 +997,32 @@ PerturbResult perturbIterateBLAScaledArrays(
             break;
         }
         Complex!double zRef = zRefArray[refIter];
-        
-        // Check reference magnitude - but DON'T automatically mark pixel as escaped
-        // At extreme zooms, even if reference escapes, delta might be significant enough
-        // to keep some pixels in the set. We need to compute the actual pixel value.
         double refMag2 = zRef.re * zRef.re + zRef.im * zRef.im;
+
+        renormalizeScaledDelta(delta, currentLogScale, currentScale);
+        bool haveScale = currentScale != 0.0 && currentScale == currentScale && currentScale != double.max;
+        bool scaleUsable = haveScale && currentScale > 0.0;
+        Complex!double deltaActual = scaleUsable
+            ? Complex!double(delta.re * currentScale, delta.im * currentScale)
+            : Complex!double(0.0, 0.0);
+        double deltaMag2Actual = scaleUsable
+            ? deltaActual.re * deltaActual.re + deltaActual.im * deltaActual.im
+            : 0.0;
+        double logDeltaMag2Actual = scaleUsable
+            ? std.math.log10(max(deltaMag2Actual, 1e-300))
+            : -double.infinity;
+        if (!scaleUsable) forcedApproximation = true;
         
-        // Check if scaled delta has grown to significant size
-        double deltaMag = sqrt(delta.re * delta.re + delta.im * delta.im);
-        double logActualMag = std.math.log10(max(deltaMag, 1e-300)) + currentLogScale;
+        auto z = scaleUsable ? (zRef + deltaActual) : zRef;
+        double zMag2 = scaleUsable ? (z.re * z.re + z.im * z.im) : refMag2;
         
-        // Compute Z = Z_ref + δ_actual for escape check
-        double zMag2;
-        if (logActualMag > -10 && currentLogScale < 0) {
-            // Delta is significant enough to affect Z directly
-            // Only use scaled computation if we're actually in scaled mode (logScale < 0)
-            double actualScale = (currentLogScale > -300) ? std.math.pow(10.0, currentLogScale) : 0;
-            
-            if (actualScale == 0 || actualScale < 1e-300) {
-                // Scale underflows but delta is significant - use approximation
-                // refMag2 is already computed above
-                double refMag = sqrt(refMag2);
-                double deltaContrib = std.math.pow(10.0, logActualMag);
-                double worstCaseMag = refMag + deltaContrib;
-                zMag2 = worstCaseMag * worstCaseMag;
-            } else {
-                auto z = zRef + Complex!double(delta.re * actualScale, delta.im * actualScale);
-                zMag2 = z.re * z.re + z.im * z.im;
-            }
-        } else {
-            // Delta still too tiny OR not in scaled mode
-            if (currentLogScale >= 0) {
-                // Not in scaled mode - use regular delta
-                auto z = zRef + delta;
-                zMag2 = z.re * z.re + z.im * z.im;
-            } else {
-                // In scaled mode but delta too tiny to affect Z directly
-                // When delta is extremely small, we need to be very careful
-                // Even tiny deltas can affect escape detection at extreme zooms
-                // Try to compute actual Z = Z_ref + delta, even if delta is tiny
-                double actualScale = (currentLogScale > -300) ? std.math.pow(10.0, currentLogScale) : 0;
-                if (actualScale > 0 && actualScale >= 1e-300) {
-                    // Can compute actual Z even with tiny scale
-                    auto z = zRef + Complex!double(delta.re * actualScale, delta.im * actualScale);
-                    zMag2 = z.re * z.re + z.im * z.im;
-                } else {
-                    // Scale is too tiny - use reference magnitude as approximation
-                    // But be conservative: if reference hasn't escaped, pixel might not either
-                    // If reference has escaped, pixel should also escape (delta can't prevent it)
-                    zMag2 = refMag2;
-                    
-                    // Only auto-escape if reference is well past escape (10x escape radius)
-                    // This ensures we don't miss pixels that should be in the set
-                    if (refMag2 > escapeRadius2 * 10.0) {
-                        double logZn = std.math.log(refMag2) * 0.5;
-                        double nu = std.math.log(logZn / std.math.log(2.0)) / std.math.log(2.0);
-                        result.iterations = iter;
-                        result.smoothed = 1 + cast(double)iter - nu;
-                        result.glitched = false;
-                        return result;
-                    }
-                }
-            }
+        if (tracePixel && iter % 128 == 0) {
+            import std.stdio : writeln;
+            writeln("[scaled] iter=", iter,
+                    " logScale=", currentLogScale,
+                    " |deltaActual|=", sqrt(deltaMag2Actual));
         }
-        
-        // Check escape based on computed pixel value (Z_ref + delta)
-        // Don't use reference magnitude alone - we need the actual pixel value
+
         if (zMag2 > escapeRadius2) {
             double logZn = std.math.log(zMag2) * 0.5;
             double nu = std.math.log(logZn / std.math.log(2.0)) / std.math.log(2.0);
@@ -1078,102 +1033,118 @@ PerturbResult perturbIterateBLAScaledArrays(
             return result;
         }
         
-        // Try to use BLA to skip iterations
-        if (!usingLastRef && refIter + 1 < cast(int)maxRefIter && blaEntriesLength > 0) {
-            int blaIdx = BLATable.findBestInEntries(blaEntriesArray, refIter, deltaMag);
+        bool shouldRebase = false;
+        if (!scaleUsable || deltaMag2Actual == 0 || deltaMag2Actual != deltaMag2Actual) {
+            shouldRebase = true;
+        } else if (zMag2 < deltaMag2Actual * rebaseThreshold) {
+            shouldRebase = true;
+        } else {
+            double growthOrders = (logDeltaMag2Actual * 0.5) - delta0LogScale;
+            if (growthOrders > 10.0 && iter - lastRebaseIter > 4) { // ~1e10 relative growth
+                shouldRebase = true;
+            }
+        }
+        if (shouldRebase) {
+            if (scaleUsable && currentScale != 0.0) {
+                delta = Complex!double(deltaActual.re / currentScale, deltaActual.im / currentScale);
+            } else {
+                delta = Complex!double(0.0, 0.0);
+                currentLogScale = delta0LogScale;
+                currentScale = pow10Clamped(currentLogScale);
+            }
+            renormalizeScaledDelta(delta, currentLogScale, currentScale);
+            refIter = 0;
+            usingLastRef = false;
+            lastRebaseIter = iter;
+            continue;
+        }
+        // If perturbation is blowing up, rebase instead of bailing out early
+        if (deltaMag2Actual > escapeRadius2 * 1e4) {
+            if (iter - lastRebaseIter > 2) {
+                lastRebaseIter = iter;
+                delta = Complex!double(deltaActual.re / currentScale, deltaActual.im / currentScale);
+                renormalizeScaledDelta(delta, currentLogScale, currentScale);
+                refIter = 0;
+                usingLastRef = false;
+                continue;
+            }
+        }
+        
+        double deltaMagActual = sqrt(deltaMag2Actual);
+        
+        bool usedBLA = false;
+        if (scaleUsable && currentLogScale > -300.0 &&
+            !usingLastRef && refIter + 1 < cast(int)maxRefIter &&
+            blaEntriesLength > 0 && deltaMagActual > 0) {
+            int blaIdx = BLATable.findBestInEntries(
+                blaEntriesArray, refIter, deltaMagActual
+            );
             
             if (blaIdx >= 0 && blaIdx < cast(int)blaEntriesLength) {
                 const BLAEntry entry = blaEntriesArray[blaIdx];
-                
-                // Don't automatically escape if BLA skip takes us past escape iteration
-                // We need to compute the actual pixel value to determine escape
-                
-                // Apply BLA: delta_new = A * delta + B * delta0
-                // For scaled deltas, BLA coefficients work the same way
-                delta = entry.A * delta + entry.B * delta0;
-                
-                iter += entry.skipCount;
-                refIter += entry.skipCount;
-                
-                // Don't automatically escape after BLA skip
-                // We'll check escape based on computed pixel value in the main loop
-                
-                if (refIter >= cast(int)maxRefIter) {
-                    refIter = cast(int)maxRefIter - 1;
-                    usingLastRef = true;
-                }
-            } else {
-                // No valid BLA, do regular perturbation step
-                if (refIter < 0 || refIter >= cast(int)maxRefIter) {
-                    break;
-                }
-                Complex!double currentZRef = zRefArray[refIter];
-                auto twoZref = currentZRef * 2.0;
-                
-                // Iterate: δ_s_{n+1} = 2·Z_ref·δ_s + δ_s²·10^logScale + δ_s_0
-                double logQuadContrib = 2.0 * std.math.log10(deltaMag) + currentLogScale;
-                
-                if (logQuadContrib > -300) {
-                    // Can include quadratic term
-                    double scaleFactor = std.math.pow(10.0, currentLogScale);
-                    auto deltaSq = Complex!double(
-                        delta.re * delta.re - delta.im * delta.im,
-                        2.0 * delta.re * delta.im
-                    ) * scaleFactor;
-                    delta = twoZref * delta + deltaSq + delta0;
-                } else {
-                    // Linear approximation (quadratic term underflows)
-                    delta = twoZref * delta + delta0;
-                }
-                
-                iter++;
-                if (!usingLastRef) {
-                    refIter++;
-                    if (refIter >= cast(int)maxRefIter) {
-                        refIter = cast(int)maxRefIter - 1;
-                        usingLastRef = true;
+
+                if (entry.skipCount <= MAX_SCALED_BLA_SKIP) {
+                    double radius = entry.radius;
+                    if (radius > 0 && deltaMagActual < radius) {
+                        auto nextDeltaActual = entry.A * deltaActual + entry.B * delta0Exact;
+                        double nextMagActual = hypot(nextDeltaActual.re, nextDeltaActual.im);
+                        if (nextMagActual == nextMagActual &&
+                            nextMagActual != double.infinity &&
+                            nextMagActual < radius * 4) {
+                            delta = Complex!double(
+                                nextDeltaActual.re / currentScale,
+                                nextDeltaActual.im / currentScale
+                            );
+                            renormalizeScaledDelta(delta, currentLogScale, currentScale);
+                            iter += entry.skipCount;
+                            refIter += entry.skipCount;
+                            if (refIter >= cast(int)maxRefIter) {
+                                refIter = cast(int)maxRefIter - 1;
+                                usingLastRef = true;
+                            }
+                            usedBLA = true;
+                            continue;
+                        }
+
                     }
                 }
             }
-        } else {
-            // No BLA available, do regular step
+        }
+        
+        if (!usedBLA) {
             if (refIter < 0 || refIter >= cast(int)maxRefIter) {
                 break;
             }
             Complex!double currentZRef = zRefArray[refIter];
-            
-            // Don't automatically escape - compute actual pixel value to determine escape
-            
             auto twoZref = currentZRef * 2.0;
             
-            double logQuadContrib = 2.0 * std.math.log10(deltaMag) + currentLogScale;
-            
-            if (logQuadContrib > -300) {
-                double scaleFactor = std.math.pow(10.0, currentLogScale);
-                auto deltaSq = Complex!double(
-                    delta.re * delta.re - delta.im * delta.im,
-                    2.0 * delta.re * delta.im
-                ) * scaleFactor;
-                delta = twoZref * delta + deltaSq + delta0;
-            } else {
-                delta = twoZref * delta + delta0;
-            }
+            auto deltaSqActual = Complex!double(
+                deltaActual.re * deltaActual.re - deltaActual.im * deltaActual.im,
+                2.0 * deltaActual.re * deltaActual.im
+            );
+            auto nextDeltaActual = twoZref * deltaActual + deltaSqActual + delta0Exact;
+            delta = Complex!double(
+                nextDeltaActual.re / currentScale,
+                nextDeltaActual.im / currentScale
+            );
+            renormalizeScaledDelta(delta, currentLogScale, currentScale);
+
             
             iter++;
-            // Don't automatically escape after incrementing - escape will be checked in main loop
-        }
-        
-        // Rescale if delta grows too large (prevents overflow)
-        deltaMag = sqrt(delta.re * delta.re + delta.im * delta.im);
-        if (deltaMag > 1e100) {
-            delta = Complex!double(delta.re * 1e-100, delta.im * 1e-100);
-            currentLogScale += 100;
+            if (!usingLastRef) {
+                refIter++;
+                if (refIter >= cast(int)maxRefIter) {
+                    refIter = cast(int)maxRefIter - 1;
+                    usingLastRef = true;
+                }
+            }
         }
     }
     
     result.iterations = iter;
     result.smoothed = cast(double)iter;
-    result.glitched = false;
+    result.glitched = forcedApproximation || usingLastRef;
+    result.uncertain = true; // Mark for high-precision fallback if we didn't escape
     return result;
 }
 
@@ -1190,4 +1161,3 @@ PerturbResult perturbIterateBLA(
         ref_.zRef, ref_.escapeRadius2, blaTable.entries, delta0, maxIterations
     );
 }
-

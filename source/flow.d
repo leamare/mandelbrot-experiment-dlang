@@ -11,6 +11,8 @@ import std.array;
 import std.range;
 import std.parallelism;
 import std.algorithm : min, max, countUntil;
+import std.format : format;
+import std.process : environment;
 
 import cerealed;
 import dlib.image;
@@ -18,7 +20,11 @@ import dlib.image;
 import mandel;
 import gmp_arb;
 import perturbation_bla;
-import multidouble : calculateNumDoubles;
+import perturbation_bla_hp;
+import multidouble : calculateNumDoubles, MultiDouble, MultiDoubleComplex, MULTIDOUBLE_MAX_COMPONENTS;
+import doubledouble : DDComplex, DoubleDouble;
+import bigfloat : BigFloat, BigFloatComplex;
+import precision_unified : estimatePrecisionFromString;
 
 // =============================================================================
 // Module-level Configuration
@@ -26,11 +32,17 @@ import multidouble : calculateNumDoubles;
 
 enum uint PRECISION_THRESHOLD_DOUBLE = 15;
 enum uint PRECISION_THRESHOLD_BIGFLOAT = 50;
-enum uint PRECISION_THRESHOLD_MULTIDOUBLE = 240;
+enum uint PRECISION_THRESHOLD_MULTIDOUBLE = 600;
 enum uint PRECISION_THRESHOLD_GMP = 241;
-enum uint MULTIDOUBLE_MIN_DOUBLES = 2;
-enum uint MULTIDOUBLE_MAX_DOUBLES = 12;
 
+enum uint MULTIDOUBLE_MIN_DOUBLES = 2;
+enum uint MULTIDOUBLE_MAX_DOUBLES = 40;
+enum uint MULTIDOUBLE_MAX_DIGITS = MULTIDOUBLE_MAX_DOUBLES * 15;
+
+enum double SCALED_DELTA_THRESHOLD = 1e-18;
+enum double SCALED_DELTA_THRESHOLD_SQUARED = SCALED_DELTA_THRESHOLD * SCALED_DELTA_THRESHOLD;
+enum double LOG10_OF_TWO = std.math.log10(2.0);
+enum double LOG10_THRESHOLD = std.math.log10(SCALED_DELTA_THRESHOLD);
 string workdir = "out";
 int saveProgress = 0;
 bool skipExisting = false;
@@ -42,19 +54,19 @@ bool skipExisting = false;
 struct RenderParams {
     int width = 800;
     int height = 800;
-        
+
     string originXStr = "-0.5";
     string originYStr = "0.0";
     string radiusStr = "2.0";
-    
+
     real originX = -0.5;
     real originY = 0.0;
     real radius = 2.0;
-        
+
     int palette = 0;
+    float paletteOffset = 0.0;
     bool paletteReverse = false;
     string paletteFile = "";
-    float paletteOffset = 0.0;
     uint dwell = 100;
     bool autoDwell = false;
     string filename;
@@ -66,25 +78,26 @@ struct RenderParams {
     BuddhaMode buddha = BuddhaMode.none;
     
     string forcePrecision = "";
+    
     string arbitraryPrecisionMethod = "";
-
+    
     int x_px_offset = 0;
     int y_px_offset = 0;
-
+    
     void applyPixelOffset() {
         if (x_px_offset == 0 && y_px_offset == 0) {
             return;
         }
-
+        
         double minDim = min(cast(double)width, cast(double)height);
         double pixelSpacing = (radius * 2.0) / minDim;
-
+        
         double offsetX = -x_px_offset * pixelSpacing;
         double offsetY = y_px_offset * pixelSpacing;
-
+        
         originX += offsetX;
         originY += offsetY;
-
+        
         if (originXStr.length > 0) {
             try {
                 real currentX = to!real(originXStr);
@@ -107,7 +120,7 @@ struct RenderParams {
             originYStr = format!"%.20g"(originY);
         }
     }
-        
+    
     PrecisionMode precisionMode() const {
         if (forcePrecision.length > 0) {
             string mode = forcePrecision.toLower().strip();
@@ -117,7 +130,7 @@ struct RenderParams {
                 return PrecisionMode.standard;
             }
         }
-                
+        
         if (radiusStr.length > 0) {
             auto ePos = radiusStr.countUntil!(c => c == 'e' || c == 'E')();
             if (ePos >= 0) {
@@ -127,14 +140,13 @@ struct RenderParams {
                 } catch (Exception) {}
             }
         }
-
         return RenderConfig.detectPrecisionMode(radius);
     }
-        
+    
     uint requiredPrecision() const {
         return RenderConfig.calculateOptimalPrecision(radius, width, height);
     }
-        
+    
     RenderConfig toRenderConfig() const {
         RenderConfig cfg;
         cfg.originX = originX;
@@ -151,6 +163,8 @@ struct RenderParams {
         cfg.colorFunc = colorfunc;
         cfg.paletteSize = palette > 0 ? palette : dwell;
         cfg.paletteOffset = paletteOffset;
+        cfg.paletteFile = paletteFile;
+        cfg.paletteReverse = paletteReverse;
         cfg.buddhaMode = buddha;
         cfg.precisionMode = precisionMode();
         cfg.arbitraryPrecision = requiredPrecision();
@@ -162,8 +176,6 @@ struct RenderParams {
 // Buddhabrot Data Collection (Thread-Safe)
 // =============================================================================
 
-/// Accumulator for Buddhabrot hit counts
-/// Uses task-local buffers to avoid contention
 struct BuddhaAccumulator {
     private int[][] globalData;
     private int width, height;
@@ -176,7 +188,7 @@ struct BuddhaAccumulator {
             row[] = 0;
         }
     }
-
+    
     int[][] createLocalBuffer() {
         auto local = new int[][](width, height);
         foreach (ref row; local) {
@@ -221,12 +233,11 @@ int getZoomExponent(string radiusStr) {
     if (ePos >= 0) {
         return to!int(radiusStr[ePos + 1 .. $]);
     }
-
+    // Try parsing as double
     try {
         double r = to!double(radiusStr);
         if (r > 0) return cast(int)floor(log10(r));
     } catch (Exception) {}
-
     return 0;
 }
 
@@ -247,6 +258,148 @@ uint estimateDwell(string radiusStr) {
     }
 }
 
+double digitsPerPixel(const RenderParams desc) {
+    import std.math : log10, isFinite;
+    int maxDim = max(desc.width, desc.height);
+    if (maxDim <= 0) {
+        return 0.0;
+    }
+    real radiusReal = desc.radius;
+    real spacingReal = (radiusReal * 2.0L) / cast(real)maxDim;
+    double pixelSpacing = cast(double)spacingReal;
+    if (pixelSpacing > 0 && isFinite(pixelSpacing)) {
+        return -log10(pixelSpacing);
+    }
+    int exp = getZoomExponent(desc.radiusStr);
+    if (exp == 0) {
+        return 0.0;
+    }
+    double logMaxDim = log10(cast(double)maxDim);
+    double logPixelSpacing = log10(2.0) + exp - logMaxDim;
+    return -logPixelSpacing;
+}
+
+uint viewportPrecisionDigits(const RenderParams desc) {
+    import std.math : isFinite;
+    real radiusReal = desc.radius;
+    if ((!isFinite(radiusReal) || radiusReal <= 0) && desc.radiusStr.length > 0) {
+        try {
+            radiusReal = to!real(desc.radiusStr);
+        } catch (Exception) {
+            radiusReal = 0;
+        }
+    }
+    if (radiusReal > 0 && isFinite(radiusReal)) {
+        return RenderConfig.calculateOptimalPrecision(radiusReal, desc.width, desc.height);
+    }
+    auto coordLen = max(desc.originXStr.length, desc.originYStr.length);
+    return cast(uint)max(50, coordLen + 20);
+}
+
+uint coordinatePrecisionDigits(const RenderParams desc) {
+    return estimatePrecisionFromString(desc.originXStr, desc.originYStr);
+}
+
+enum uint COORDINATE_SAFETY_MARGIN = 30;
+
+private uint clampCoordinateDigits(uint viewportDigits, uint coordDigitsRaw) {
+    return coordDigitsRaw > viewportDigits + COORDINATE_SAFETY_MARGIN
+        ? viewportDigits + COORDINATE_SAFETY_MARGIN
+        : coordDigitsRaw;
+}
+
+enum uint COORDINATE_TRIM_EXTRA_DIGITS = 8;
+
+private string trimCoordinatePrecision(string value, uint maxFractionDigits) {
+    if (maxFractionDigits == uint.max) {
+        return value;
+    }
+    auto str = value.strip();
+    if (str.length == 0) {
+        return str;
+    }
+    auto ePos = str.countUntil!(c => c == 'e' || c == 'E')();
+    string exponentPart = ePos >= 0 ? str[ePos .. $] : "";
+    string mantissa = ePos >= 0 ? str[0 .. ePos] : str;
+    auto dotPos = mantissa.countUntil('.');
+    if (dotPos < 0) {
+        return str;
+    }
+
+    size_t start = dotPos + 1;
+    size_t available = mantissa.length > start ? mantissa.length - start : 0;
+    size_t keepDigits = cast(size_t)maxFractionDigits + COORDINATE_TRIM_EXTRA_DIGITS;
+    if (available <= keepDigits) {
+        return str;
+    }
+
+    size_t end = min(mantissa.length, start + keepDigits);
+    string trimmed;
+    if (keepDigits == 0) {
+        trimmed = mantissa[0 .. dotPos];
+    } else {
+        trimmed = mantissa[0 .. end];
+    }
+    if (trimmed.length > 0 && trimmed[$ - 1] == '.') {
+        trimmed = trimmed[0 .. $ - 1];
+    }
+    return trimmed ~ exponentPart;
+}
+
+double computeLog10FromDecimal(string value, double fallbackValue) {
+    import std.math : isFinite, log10;
+    string trimmed = value.strip();
+    double fallbackLog = fallbackValue > 0 && isFinite(fallbackValue)
+        ? log10(fallbackValue)
+        : 0.0;
+    if (trimmed.length == 0) {
+        return fallbackLog;
+    }
+    try {
+        auto bigValue = BigFloat(trimmed);
+        if (bigValue.mantissa == 0) {
+            return -double.infinity;
+        }
+        auto mantissa = bigValue.mantissa;
+        if (mantissa < 0) {
+            mantissa = -mantissa;
+        }
+        string digits = to!string(mantissa);
+        if (digits.length == 0) {
+            return fallbackLog;
+        }
+        string normalized;
+        if (digits.length == 1) {
+            normalized = digits;
+        } else {
+            size_t keep = min(size_t(16), digits.length - 1);
+            normalized = digits[0] ~ "." ~ digits[1 .. 1 + keep];
+        }
+        double normalizedValue = to!double(normalized);
+        double log10Mantissa = log10(normalizedValue) + cast(double)(digits.length - 1);
+        return log10Mantissa + cast(double)bigValue.exponent;
+    } catch (Exception) {
+        try {
+            real parsed = to!real(trimmed);
+            if (parsed > 0) {
+                return log10(cast(double)parsed);
+            } else if (parsed < 0) {
+                return log10(-cast(double)parsed);
+            }
+            return -double.infinity;
+        } catch (Exception) {
+            return fallbackLog;
+        }
+    }
+}
+
+uint combinedPrecisionDigits(const RenderParams desc) {
+    auto viewportDigits = viewportPrecisionDigits(desc);
+    auto coordDigitsRaw = coordinatePrecisionDigits(desc);
+    auto coordDigits = clampCoordinateDigits(viewportDigits, coordDigitsRaw);
+    return max(viewportDigits, coordDigits);
+}
+
 int estimatePalette(uint dwell) {
     if (dwell <= 1000) {
         return max(50, cast(int)(dwell * 0.5));
@@ -259,6 +412,47 @@ int estimatePalette(uint dwell) {
     }
 }
 
+uint extraMultiDoubleComponents(const RenderParams desc) {
+    import std.math : ceil;
+    double digitsForPixels = digitsPerPixel(desc);
+
+    enum double PIXEL_GUARD_START = 18.0;
+    enum double PIXEL_SLOPE = 0.65;
+    double excess = digitsForPixels > PIXEL_GUARD_START
+        ? digitsForPixels - PIXEL_GUARD_START
+        : 0.0;
+    uint extraFromPixels = excess > 0
+        ? cast(uint)ceil(excess * PIXEL_SLOPE)
+        : 0;
+
+    int zoomExp = getZoomExponent(desc.radiusStr);
+    int zoomDepth = zoomExp < 0 ? -zoomExp : 0;
+    enum int ZOOM_THRESHOLD = 35;
+    uint extraFromZoom = zoomDepth > ZOOM_THRESHOLD
+        ? cast(uint)min(12, (zoomDepth - ZOOM_THRESHOLD + 2) / 2)
+        : 0;
+
+    return extraFromPixels + extraFromZoom;
+}
+
+uint selectMultiDoubleComponents(uint digits, const RenderParams desc) {
+    uint base = calculateNumDoubles(digits);
+    uint extra = extraMultiDoubleComponents(desc);
+    return min(base + extra, MULTIDOUBLE_MAX_COMPONENTS);
+}
+
+uint selectDeltaMultiDoubleComponents(double perPixelDigits, uint referenceComponents) {
+    import std.math : ceil;
+    uint needed = cast(uint)ceil(perPixelDigits / 15.0);
+    if (needed < MULTIDOUBLE_MIN_DOUBLES) {
+        needed = MULTIDOUBLE_MIN_DOUBLES;
+    }
+    if (referenceComponents > 0) {
+        needed = min(needed, referenceComponents);
+    }
+    return needed;
+}
+
 // =============================================================================
 // Main Render Flow
 // =============================================================================
@@ -268,48 +462,46 @@ void brotFlow(RenderParams desc) {
         writeln("File `" ~ desc.filename ~ "` exists, skipping...\n");
         return;
     }
-
+    
     if (desc.autoDwell) {
         desc.dwell = estimateDwell(desc.radiusStr);
         if (desc.palette == 0) {
-                desc.palette = estimatePalette(desc.dwell);
+            desc.palette = estimatePalette(desc.dwell);
         }
-
         writeln("Auto-dwell: estimated ", desc.dwell, " iterations for this zoom depth");
     }
     
     if (desc.x_px_offset != 0 || desc.y_px_offset != 0) {
         desc.applyPixelOffset();
         writeln("Applied pixel offset: x=", desc.x_px_offset, ", y=", desc.y_px_offset);
-
         if (desc.filename.length == 0 || desc.filename == desc.generateFileName()) {
             desc.filename = desc.generateFileName();
         }
     }
-        
+    
     auto cfg = desc.toRenderConfig();
-        
+    
     const int wfactor = desc.width > 100 ? to!int(floor(to!double(desc.width) / 100.0)) : 1;
-
+    
     writeln("Iterations: ", desc.dwell, desc.autoDwell ? " (auto)" : "");
     writeln("Image size: ", desc.width, " x ", desc.height);
     writeln("Origin: ", desc.originXStr.length > 40 ? desc.originXStr[0..40] ~ "..." : format!"%.17g"(desc.originX),
-                    (desc.originY < 0 ? " - " : " + "), 
-                    desc.originYStr.length > 40 ? desc.originYStr[0..40] ~ "..." : format!"%.17g"(abs(desc.originY)), "i");
+            (desc.originY < 0 ? " - " : " + "), 
+            desc.originYStr.length > 40 ? desc.originYStr[0..40] ~ "..." : format!"%.17g"(abs(desc.originY)), "i");
     writeln("Viewpoint radius: ", desc.radiusStr);
     writeln("Palette size: ", cfg.paletteSize, " + ", desc.paletteOffset);
     writeln("Buddha: ", to!string(desc.buddha));
     string precisionMsg = cfg.precisionMode == PrecisionMode.arbitrary ? 
-                    "GMP Arbitrary Precision" : "Standard";
+            "GMP Arbitrary Precision" : "Standard";
     if (desc.forcePrecision.length > 0) {
-            precisionMsg ~= " (forced: " ~ desc.forcePrecision ~ ")";
+        precisionMsg ~= " (forced: " ~ desc.forcePrecision ~ ")";
     }
     writeln("Precision: ", precisionMsg);
     writeln("Filename: ", desc.filename);
 
     IterResult[][] iters = new IterResult[][](desc.width, desc.height);
 
-    writeln("\nIterating");
+	writeln("\nIterating");
 
     if (desc.buddha != BuddhaMode.none) {
         iterateBuddhabrot(iters, cfg, desc, wfactor);
@@ -318,7 +510,7 @@ void brotFlow(RenderParams desc) {
     } else {
         iterateSimple(iters, cfg, desc, wfactor);
     }
-
+    
     SuperImage img = image(desc.width, desc.height);
     
     writeln("\nGenerating image");
@@ -332,14 +524,16 @@ void brotFlow(RenderParams desc) {
             stdout.flush();
         }
     }
-
+    
     writeln("\nSaving: " ~ workdir ~ "/" ~ desc.filename ~ ".png");
     savePNG(img, workdir ~ "/" ~ desc.filename ~ ".png");
+    
     writeln("--------------------\n");
 }
 
 private void iterateSimple(ref IterResult[][] iters, const ref RenderConfig cfg, 
-                                                    const ref RenderParams desc, int wfactor) {
+                          const ref RenderParams desc, int wfactor) {
+    
     if (cfg.precisionMode == PrecisionMode.arbitrary) {
         iterateGMPMode(iters, cfg, desc, wfactor);
     } else {
@@ -356,56 +550,73 @@ private void iterateSimple(ref IterResult[][] iters, const ref RenderConfig cfg,
     }
 }
 
-private void iterateGMPMode(ref IterResult[][] iters, const ref RenderConfig cfg, const ref RenderParams desc, int wfactor) {
+private void iterateGMPMode(ref IterResult[][] iters, const ref RenderConfig cfg,
+                            const ref RenderParams desc, int wfactor) {
     import precision_unified : PrecisionMethod, parsePrecisionMethod, selectPrecisionMethod;
     import gmp_arb : GMPFloat;
     import std.complex;
     import core.atomic;
+
+    if (cfg.fractalType != FractalType.mandelbrot) {
+        writeln("Perturbation+BLA currently supports only the Mandelbrot set; falling back to direct iteration.");
+        iterateGMPDirectMode(iters, cfg, desc, wfactor);
+        return;
+    }
     
     PrecisionMethod precisionMethod = PrecisionMethod.auto_;
-    
     if (desc.arbitraryPrecisionMethod.length > 0) {
         precisionMethod = parsePrecisionMethod(desc.arbitraryPrecisionMethod);
         writeln("Using forced precision method: ", desc.arbitraryPrecisionMethod);
-        if (precisionMethod == PrecisionMethod.bigint) {
-            precisionMethod = PrecisionMethod.gmp;
-            writeln("Note: bigint precision method uses GMP implementation");
-        }
     } else if (desc.forcePrecision.length > 0) {
         string mode = desc.forcePrecision.toLower().strip();
-        if (mode == "bigfloat" || mode == "dd" || mode == "doubledouble" || mode == "bigfixed") {
+        if (mode == "dd" || mode == "doubledouble") {
             precisionMethod = PrecisionMethod.bigfloat;
+        } else if (mode == "bigint" || mode == "bigfloat") {
+            precisionMethod = PrecisionMethod.bigint;
         } else if (mode == "gmp" || mode == "arbitrary") {
             precisionMethod = PrecisionMethod.gmp;
         } else if (mode == "double" || mode == "standard") {
             precisionMethod = PrecisionMethod.double_;
-        } else if (mode == "bigint") {
-            precisionMethod = PrecisionMethod.gmp;
-            writeln("Note: bigint precision method uses GMP implementation");
         } else {
             precisionMethod = parsePrecisionMethod(mode);
-            if (precisionMethod == PrecisionMethod.bigint) {
-                precisionMethod = PrecisionMethod.gmp;
-                writeln("Note: bigint precision method uses GMP implementation");
-            }
         }
     }
     
+    uint viewportDigits = viewportPrecisionDigits(desc);
+    uint coordDigitsRaw = coordinatePrecisionDigits(desc);
+    uint coordDigits = clampCoordinateDigits(viewportDigits, coordDigitsRaw);
+    uint combinedDigits = max(viewportDigits, coordDigits);
+    string originXHP = desc.originXStr.length > 0
+        ? desc.originXStr
+        : format!"%.20g"(desc.originX);
+    string originYHP = desc.originYStr.length > 0
+        ? desc.originYStr
+        : format!"%.20g"(desc.originY);
+    string radiusHP = desc.radiusStr.length > 0
+        ? desc.radiusStr
+        : format!"%.20g"(desc.radius);
+    uint coordDigitsTrim = coordDigitsRaw > 0 ? uint.max : coordDigits;
+    uint radiusDigitsTrim = uint.max;
+    originXHP = trimCoordinatePrecision(originXHP, coordDigitsTrim);
+    originYHP = trimCoordinatePrecision(originYHP, coordDigitsTrim);
+    radiusHP = trimCoordinatePrecision(radiusHP, radiusDigitsTrim);
+    double radiusLog10 = computeLog10FromDecimal(radiusHP, desc.radius > 0 ? desc.radius : 1.0);
+    bool forceScaledDelta = (radiusLog10 + LOG10_OF_TWO) <= LOG10_THRESHOLD;
+    RenderParams descHP = desc;
+    descHP.originXStr = originXHP;
+    descHP.originYStr = originYHP;
+    descHP.radiusStr = radiusHP;
+    
     if (precisionMethod == PrecisionMethod.auto_) {
-        uint digits;
-        if (desc.radiusStr.length > 0) {
-            real radius = desc.radius;
-            digits = RenderConfig.calculateOptimalPrecision(radius, desc.width, desc.height);
-        } else {
-            auto coordLen = max(desc.originXStr.length, desc.originYStr.length);
-            digits = cast(uint)max(50, coordLen + 20);
-        }
+        uint digits = combinedDigits;
         
-        PrecisionMethod arbitraryMethod = PrecisionMethod.gmp;
+        PrecisionMethod arbitraryMethod = PrecisionMethod.bigint;
+        bool arbitraryMethodWasBigInt = true;
         if (desc.arbitraryPrecisionMethod.length > 0) {
             auto arbMethod = parsePrecisionMethod(desc.arbitraryPrecisionMethod);
             if (arbMethod == PrecisionMethod.bigint || arbMethod == PrecisionMethod.gmp) {
                 arbitraryMethod = arbMethod;
+                arbitraryMethodWasBigInt = (arbMethod == PrecisionMethod.bigint);
             }
         }
         
@@ -416,47 +627,60 @@ private void iterateGMPMode(ref IterResult[][] iters, const ref RenderConfig cfg
             precisionMethod == PrecisionMethod.bigfloat ? "bigfloat" :
             precisionMethod == PrecisionMethod.multidouble ? "multidouble" :
             precisionMethod == PrecisionMethod.gmp ? "gmp" :
-            precisionMethod == PrecisionMethod.bigint ? "bigint" : "auto";
+            precisionMethod == PrecisionMethod.bigint ? "bigfloat (BigInt)" :
+            "auto";
         
         if (precisionMethod == PrecisionMethod.multidouble) {
-            uint numDoubles = calculateNumDoubles(digits);
-            writeln("Auto-selected precision method: ", methodName, " (", numDoubles, " doubles, based on ", digits, " required digits)");
+            uint numDoubles = selectMultiDoubleComponents(digits, desc);
+            writeln("Auto-selected precision method: ", methodName,
+                    " (", numDoubles, " doubles, based on ", digits,
+                    " required digits; viewport=", viewportDigits,
+                    ", coords=", coordDigits, " (raw ", coordDigitsRaw, "))");
         } else {
-            writeln("Auto-selected precision method: ", methodName, " (based on ", digits, " required digits)");
+            writeln("Auto-selected precision method: ", methodName,
+                    " (based on ", digits, " required digits; viewport=",
+                    viewportDigits, ", coords=", coordDigits, " (raw ",
+                    coordDigitsRaw, "))");
         }
-        if (digits > 100) {
-            writeln("  Using ", arbitraryMethod == PrecisionMethod.gmp ? "GMP" : "bigint", 
-                    " for very high precision");
+        if (digits > 100 && precisionMethod == PrecisionMethod.gmp) {
+            string arbName = arbitraryMethodWasBigInt ? "BigFloat" : "GMP";
+            writeln("  Using ", arbName, " for very high precision");
         }
     }
     
-    if (precisionMethod == PrecisionMethod.gmp || precisionMethod == PrecisionMethod.bigint) {
-        uint digits;
-        if (desc.radiusStr.length > 0) {
-            real radius = desc.radius;
-            digits = RenderConfig.calculateOptimalPrecision(radius, desc.width, desc.height);
-        } else {
-            auto coordLen = max(desc.originXStr.length, desc.originYStr.length);
-            digits = cast(uint)max(50, coordLen + 20);
-        }
+    double perPixelDigitsEstimate = 0;
+    double multiDoubleCapacityDigits = 0;
+    bool havePerPixelEstimate = false;
+    uint numDoublesForMD = 0;
+
+    if (precisionMethod == PrecisionMethod.gmp) {
+        uint digits = combinedDigits;
         GMPFloat.setPrecisionDigits(digits);
-        writeln("Using Perturbation+BLA for deep zoom");
+        writeln("Using Perturbation+BLA for deep zoom (GMP)");
         writeln("Reference orbit precision: ", digits, " digits");
     } else if (precisionMethod == PrecisionMethod.multidouble) {
-        uint digits;
-        if (desc.radiusStr.length > 0) {
-            real radius = desc.radius;
-            digits = RenderConfig.calculateOptimalPrecision(radius, desc.width, desc.height);
-        } else {
-            auto coordLen = max(desc.originXStr.length, desc.originYStr.length);
-            digits = cast(uint)max(50, coordLen + 20);
-        }
-        uint numDoubles = calculateNumDoubles(digits);
-        writeln("Using Perturbation+BLA with multidouble precision (", numDoubles, " doubles)");
+        uint digits = combinedDigits;
+        uint numDoubles = selectMultiDoubleComponents(digits, desc);
+        numDoublesForMD = numDoubles;
+        double perPixelDigits = digitsPerPixel(desc);
+        uint numDoublesDelta = selectDeltaMultiDoubleComponents(perPixelDigits, numDoubles);
+        writeln("Using Perturbation+BLA with multidouble precision (reference ",
+                numDoubles, " doubles, per-pixel ", numDoublesDelta, " doubles)");
         writeln("Reference orbit precision: ", digits, " digits");
+        auto mdCapacity = numDoubles * 15.0;
+        perPixelDigitsEstimate = perPixelDigits;
+        multiDoubleCapacityDigits = mdCapacity;
+        havePerPixelEstimate = true;
+        writeln("Per-pixel delta requires ~", format!"%.1f"(perPixelDigits),
+                " digits; MultiDouble capacity ≈ ", format!"%.0f"(mdCapacity), " digits");
+        if (perPixelDigits > mdCapacity * 0.85) {
+            writeln("  Warning: pixel spacing is close to the MultiDouble limit; expect targeted fallbacks if artifacts appear.");
+        }
+    } else if (precisionMethod == PrecisionMethod.bigint) {
+        writeln("Using Perturbation+BLA with BigFloat precision (BigInt-based)");
     } else {
         writeln("Using Perturbation+BLA with ", 
-            precisionMethod == PrecisionMethod.bigfloat ? "bigfloat" : "double", " precision");
+                precisionMethod == PrecisionMethod.bigfloat ? "bigfloat" : "double", " precision");
     }
     
     writeln("Computing reference orbit at center:");
@@ -466,59 +690,85 @@ private void iterateGMPMode(ref IterResult[][] iters, const ref RenderConfig cfg
     stdout.flush();
     
     auto refOrbit = computeReferenceOrbit(
-        desc.originXStr, desc.originYStr, desc.dwell, precisionMethod
+        originXHP, originYHP, desc.dwell, precisionMethod
     );
-
+    ReferenceOrbit bigFloatFallbackOrbit;
+    bool haveBigFloatFallback = false;
+    
     writeln("Reference orbit computed with precision method: ", 
-        precisionMethod == PrecisionMethod.double_ ? "double" :
-        precisionMethod == PrecisionMethod.bigfloat ? "bigfloat" :
-        precisionMethod == PrecisionMethod.multidouble ? "multidouble" :
-        precisionMethod == PrecisionMethod.gmp ? "gmp" : "auto");
-        
+            precisionMethod == PrecisionMethod.double_ ? "double" :
+            precisionMethod == PrecisionMethod.bigfloat ? "bigfloat" :
+            precisionMethod == PrecisionMethod.multidouble ? "multidouble" :
+            precisionMethod == PrecisionMethod.bigint ? "bigfloat (BigInt)" :
+            precisionMethod == PrecisionMethod.gmp ? "gmp" : "auto");
+
+    if (precisionMethod == PrecisionMethod.multidouble &&
+        havePerPixelEstimate &&
+        multiDoubleCapacityDigits > 0 &&
+        perPixelDigitsEstimate > multiDoubleCapacityDigits * 0.9) {
+        writeln("Per-pixel deltas exceed MultiDouble resolution (",
+                format!"%.1f"(perPixelDigitsEstimate), " vs ",
+                format!"%.1f"(multiDoubleCapacityDigits), " digits). Preparing BigFloat fallback orbit...");
+        bigFloatFallbackOrbit = computeReferenceOrbit(
+            originXHP, originYHP, desc.dwell, PrecisionMethod.bigint
+        );
+        haveBigFloatFallback = bigFloatFallbackOrbit.zRefBigFloat.length > 0;
+        if (!haveBigFloatFallback) {
+            writeln("Warning: BigFloat fallback orbit failed to produce data; continuing with MultiDouble only.");
+        }
+    }
+    
     if (refOrbit.zRef.length < 2) {
         writeln("ERROR: Reference orbit too short, falling back to direct GMP");
-        iterateGMPDirectMode(iters, cfg, desc, wfactor);
+        iterateGMPDirectMode(iters, cfg, descHP, wfactor);
         return;
     }
-        
-    auto blaTable = buildBLATable(refOrbit);
+
+    IterResult referencePixelIter;
+    {
+        int referenceIterations = min(refOrbit.refIterations, cast(int)desc.dwell);
+        double referenceSmoothed = cast(double)referenceIterations;
+        if (refOrbit.escaped &&
+            referenceIterations >= 0 &&
+            referenceIterations < refOrbit.zRef.length) {
+            auto zAtEscape = refOrbit.zRef[referenceIterations];
+            double zMag2 = zAtEscape.re * zAtEscape.re + zAtEscape.im * zAtEscape.im;
+            if (zMag2 > 0 && std.math.isFinite(zMag2)) {
+                double logZn = std.math.log(zMag2) * 0.5;
+                double nu = std.math.log(logZn / std.math.log(2.0)) / std.math.log(2.0);
+                referenceSmoothed = 1 + cast(double)referenceIterations - nu;
+            }
+        } else if (!refOrbit.escaped) {
+            referenceIterations = cast(int)desc.dwell;
+            referenceSmoothed = cast(double)desc.dwell;
+        }
+        referencePixelIter = IterResult(referenceIterations, referenceSmoothed);
+    }
+    
+    if (numDoublesForMD == 0) {
+        numDoublesForMD = refOrbit.multiDoubleComponents;
+    }
+    auto refOrbitForBLA = haveBigFloatFallback ? &bigFloatFallbackOrbit : &refOrbit;
+    BLATable blaTable = buildBLATable(*refOrbitForBLA);
+    
     writeln("Starting perturbation iteration with BLA...");
-        
+    
     import gmp_arb : GMPFloat, GMPPixelConverter, GMPComplex;
-    import multidouble : MultiDoublePixelConverter, MultiDoubleComplex;
     
     GMPComplex cRefGMP;
     GMPPixelConverter pixelConverterGMP;
-    MultiDoublePixelConverter pixelConverterMD;
-    MultiDoubleComplex cRefMD;
-    bool usingMultiDoubleConverter = false;
     
-    if (precisionMethod == PrecisionMethod.multidouble) {
-        uint digits;
-        if (desc.radiusStr.length > 0) {
-            real radius = desc.radius;
-            digits = RenderConfig.calculateOptimalPrecision(radius, desc.width, desc.height);
-        } else {
-            auto coordLen = max(desc.originXStr.length, desc.originYStr.length);
-            digits = cast(uint)max(50, coordLen + 20);
+    switch (precisionMethod) {
+        default: {
+            pixelConverterGMP = GMPPixelConverter(
+                desc.width, desc.height,
+                originXHP, originYHP, radiusHP
+            );
+            cRefGMP = GMPComplex(originXHP, originYHP);
+            break;
         }
-        uint numDoubles = calculateNumDoubles(digits);
-        pixelConverterMD = MultiDoublePixelConverter(
-            desc.width, desc.height,
-            desc.originXStr, desc.originYStr, desc.radiusStr,
-            numDoubles
-        );
-        cRefMD = MultiDoubleComplex(numDoubles, desc.originXStr, desc.originYStr);
-        usingMultiDoubleConverter = true;
-    } else {
-        pixelConverterGMP = GMPPixelConverter(
-            desc.width, desc.height,
-            desc.originXStr, desc.originYStr, desc.radiusStr
-        );
-        cRefGMP = GMPComplex(desc.originXStr, desc.originYStr);
-        usingMultiDoubleConverter = false;
     }
-        
+    
     double w = cast(double)desc.width;
     double h = cast(double)desc.height;
     double minDim = min(w, h);
@@ -528,144 +778,256 @@ private void iterateGMPMode(ref IterResult[][] iters, const ref RenderConfig cfg
         di = desc.width > desc.height ? diff : 0;
         dr = desc.width > desc.height ? 0 : diff;
     }
+
+    double[] relXValues = new double[](desc.width);
+    foreach (i; 0 .. desc.width) {
+        relXValues[i] = (cast(double)i / minDim) * 2.0 - (1.0 + di);
+    }
+    double[] relYValues = new double[](desc.height);
+    foreach (j; 0 .. desc.height) {
+        relYValues[j] = (cast(double)j / minDim) * 2.0 - (1.0 + dr);
+    }
+
+    MultiDouble pixelScaleMD;
+    MultiDouble[] relXValuesMD;
+    MultiDouble[] relYValuesMD;
+    string radiusStrForMD;
+    MultiDoubleComplex centerCoordMD;
+    if (precisionMethod == PrecisionMethod.multidouble && numDoublesForMD > 0) {
+        radiusStrForMD = radiusHP;
+        auto radiusMD = MultiDouble(numDoublesForMD, radiusStrForMD);
+        auto twoMD = MultiDouble(numDoublesForMD, 2.0);
+        pixelScaleMD = radiusMD * twoMD;
+        centerCoordMD = MultiDoubleComplex(numDoublesForMD, originXHP, originYHP);
+
+        relXValuesMD.length = desc.width;
+        foreach (i; 0 .. desc.width) {
+            relXValuesMD[i] = MultiDouble(numDoublesForMD, relXValues[i]);
+        }
+        relYValuesMD.length = desc.height;
+        foreach (j; 0 .. desc.height) {
+            relYValuesMD[j] = MultiDouble(numDoublesForMD, relYValues[j]);
+        }
+    }
+
+    BigFloat pixelScaleBF;
+    BigFloat[] relXValuesBF;
+    BigFloat[] relYValuesBF;
+    if (precisionMethod == PrecisionMethod.bigint || haveBigFloatFallback) {
+        auto radiusBF = BigFloat(radiusHP);
+        auto twoBF = BigFloat("2");
+        pixelScaleBF = radiusBF * twoBF;
+        relXValuesBF.length = desc.width;
+        foreach (i; 0 .. desc.width) {
+            relXValuesBF[i] = BigFloat(format!"%.20g"(relXValues[i]));
+        }
+        relYValuesBF.length = desc.height;
+        foreach (j; 0 .. desc.height) {
+            relYValuesBF[j] = BigFloat(format!"%.20g"(relYValues[j]));
+        }
+    }
     
     shared int processedPixels = 0;
     int totalPixels = desc.width * desc.height;
     int progressInterval = max(1, totalPixels / 40);
     shared int lastPercent = -1;
     
+    bool allowSecondPass = (precisionMethod == PrecisionMethod.multidouble ||
+                            precisionMethod == PrecisionMethod.bigint ||
+                            precisionMethod == PrecisionMethod.gmp);
+    bool[][] uncertainMask;
+    if (allowSecondPass) {
+        uncertainMask.length = desc.width;
+        foreach (i; 0 .. desc.width) {
+            uncertainMask[i] = new bool[](desc.height);
+        }
+    }
+
     write("Progress: ");
     stdout.flush();
     
-    const Complex!double[] zRefArray = refOrbit.zRef.dup;
+    const Complex!double[] zRefArray = refOrbitForBLA.zRef.dup;
+    const DDComplex[] zRefArrayDD = refOrbit.zRefDoubleDouble.dup;
+    const MultiDoubleComplex[] zRefArrayMD = refOrbit.zRefMultiDouble.dup;
+    const GMPComplex[] zRefArrayGMP = refOrbit.zRefGMP.dup;
+    const BigFloatComplex[] zRefArrayBF =
+        precisionMethod == PrecisionMethod.bigint ? refOrbit.zRefBigFloat.dup :
+        haveBigFloatFallback ? bigFloatFallbackOrbit.zRefBigFloat.dup :
+        null;
     const BLAEntry[] blaEntriesArray = blaTable.entries.dup;
     const double escapeRadius2 = refOrbit.escapeRadius2;
-    
-    MultiDoubleComplex[] zRefArrayMD;
-    uint numDoublesForMD = 0;
-    if (precisionMethod == PrecisionMethod.multidouble) {
-        import perturbation_bla_hp : computeReferenceOrbitMultiDouble;
-        if (desc.radiusStr.length > 0) {
-            real radius = desc.radius;
-            numDoublesForMD = calculateNumDoubles(RenderConfig.calculateOptimalPrecision(radius, desc.width, desc.height));
-        } else {
-            auto coordLen = max(desc.originXStr.length, desc.originYStr.length);
-            numDoublesForMD = calculateNumDoubles(cast(uint)max(50, coordLen + 20));
-        }
-        writeln("Computing MultiDouble reference orbit (", numDoublesForMD, " doubles) for first pass...");
-        zRefArrayMD = computeReferenceOrbitMultiDouble(
-            desc.originXStr, desc.originYStr, desc.dwell, numDoublesForMD
-        );
-        writeln("MultiDouble reference orbit computed: ", zRefArrayMD.length, " points");
-    }
-        
+
     auto wRange = iota(0, desc.width);
     foreach (i; parallel(wRange)) {
         for (int j = 0; j < desc.height; j++) {
             Complex!double delta0;
             double delta0LogScale = 0.0;
             bool useScaledDelta = false;
+            DDComplex delta0DD;
+            GMPComplex delta0GMP;
+            BigFloatComplex delta0BF;
             
-            if (usingMultiDoubleConverter) {
-                auto pixelC = pixelConverterMD.pixelToComplex(i, j);
-                auto delta0MD = pixelC - cRefMD;
-                double delta0Real = delta0MD.re.toDouble();
-                double delta0Imag = delta0MD.im.toDouble();
-                
-                double delta0Mag2 = delta0Real * delta0Real + delta0Imag * delta0Imag;
-                double radius;
-                try {
-                    radius = to!double(desc.radiusStr);
-                } catch (Exception) {
-                    radius = 0;
-                }
-                bool isActuallyZero = delta0MD.re.isZero() && delta0MD.im.isZero();
-                if ((radius <= 1e-300 || radius == 0) || (delta0Real == 0.0 && delta0Imag == 0.0 && !isActuallyZero)) {
-                    // Delta is too small - use scaled representation
-                    useScaledDelta = true;
-                    double relX = (cast(double)i / minDim) * 2.0 - (1.0 + di);
-                    double relY = -((cast(double)j / minDim) * 2.0 - (1.0 + dr));
-                    delta0 = Complex!double(relX * 2.0, relY * 2.0);  // Normalized delta
-
-                    auto ePos = desc.radiusStr.countUntil!(c => c == 'e' || c == 'E')();
-                    if (ePos >= 0) {
-                        delta0LogScale = to!double(desc.radiusStr[ePos + 1 .. $]);
-                    } else {
-                        delta0LogScale = std.math.log10(cast(double)desc.radius);
-                    }
+            double relX = relXValues[i];
+            double relY = relYValues[j];
+            bool isCenterPixel = (relX == 0.0 && relY == 0.0);
+            
+            double delta0Real = relX * desc.radius * 2.0;
+            double delta0Imag = relY * desc.radius * 2.0;
+            double deltaAbsSq = delta0Real * delta0Real + delta0Imag * delta0Imag;
+            bool deltaTooSmallForDouble = (!isCenterPixel &&
+                precisionMethod != PrecisionMethod.bigint &&
+                (deltaAbsSq == 0.0 ||
+                deltaAbsSq < SCALED_DELTA_THRESHOLD_SQUARED ||
+                forceScaledDelta));
+            if (deltaTooSmallForDouble) {
+                useScaledDelta = true;
+                delta0 = Complex!double(relX * 2.0, relY * 2.0);
+                auto ePos = radiusHP.countUntil!(c => c == 'e' || c == 'E')();
+                if (ePos >= 0) {
+                    delta0LogScale = to!double(radiusHP[ePos + 1 .. $]);
                 } else {
-                    delta0 = Complex!double(delta0Real, delta0Imag);
+                    delta0LogScale = std.math.log10(cast(double)desc.radius);
                 }
             } else {
-                auto pixelC = pixelConverterGMP.pixelToComplex(i, j);
-                auto delta0GMP = pixelC - cRefGMP;
-                double delta0Real = delta0GMP.re.toDouble();
-                double delta0Imag = delta0GMP.im.toDouble();
-                
-                double delta0Mag2 = delta0Real * delta0Real + delta0Imag * delta0Imag;
-                double radius;
-                try {
-                    radius = to!double(desc.radiusStr);
-                } catch (Exception) {
-                    radius = 0;
-                }
-                // Only use scaled delta if radius is unrepresentable OR delta0 rounds to zero
-                if ((radius <= 1e-300 || radius == 0) || (delta0Real == 0.0 && delta0Imag == 0.0)) {
-                    // Delta is too small - use scaled representation
-                    useScaledDelta = true;
-                    double relX = (cast(double)i / minDim) * 2.0 - (1.0 + di);
-                    double relY = -((cast(double)j / minDim) * 2.0 - (1.0 + dr));
-                    delta0 = Complex!double(relX * 2.0, relY * 2.0);
+                delta0 = Complex!double(delta0Real, delta0Imag);
+            }
 
-                    auto ePos = desc.radiusStr.countUntil!(c => c == 'e' || c == 'E')();
-                    if (ePos >= 0) {
-                        delta0LogScale = to!double(desc.radiusStr[ePos + 1 .. $]);
+            MultiDoubleComplex delta0MD;
+            if (precisionMethod == PrecisionMethod.multidouble && numDoublesForMD > 0) {
+                auto deltaReMD = relXValuesMD[i] * pixelScaleMD;
+                auto deltaImMD = relYValuesMD[j] * pixelScaleMD;
+                delta0MD = MultiDoubleComplex(deltaReMD, deltaImMD);
+            }
+
+            if (precisionMethod == PrecisionMethod.bigint) {
+                auto deltaReBF = relXValuesBF[i] * pixelScaleBF;
+                auto deltaImBF = relYValuesBF[j] * pixelScaleBF;
+                delta0BF = BigFloatComplex(deltaReBF, deltaImBF);
+            }
+
+            bool usedBigFloatFallback = false;
+            PerturbResult fallbackPerturb;
+            if (precisionMethod == PrecisionMethod.multidouble &&
+                haveBigFloatFallback &&
+                zRefArrayBF.length > 0 &&
+                !isCenterPixel &&
+                numDoublesForMD > 0 &&
+                delta0MD.re.isZero() && delta0MD.im.isZero()) {
+                auto deltaReBF = relXValuesBF[i] * pixelScaleBF;
+                auto deltaImBF = relYValuesBF[j] * pixelScaleBF;
+                auto deltaFallback = BigFloatComplex(deltaReBF, deltaImBF);
+                import perturbation_bla_hp : perturbIterateBLABigFloat;
+                fallbackPerturb = perturbIterateBLABigFloat(
+                    zRefArrayBF, escapeRadius2, blaEntriesArray,
+                    deltaFallback, desc.dwell
+                );
+                usedBigFloatFallback = true;
+            }
+
+            if (!isCenterPixel && !usedBigFloatFallback) {
+                if (precisionMethod == PrecisionMethod.bigfloat) {
+                    delta0DD = DDComplex(DoubleDouble(delta0.re), DoubleDouble(delta0.im));
+                } else if (precisionMethod == PrecisionMethod.gmp) {
+                    auto pixelC = pixelConverterGMP.pixelToComplex(i, j);
+                    delta0GMP = pixelC - cRefGMP;
+                }
+
+                auto runDoublePerturb = () {
+                    PerturbResult res;
+                    if (useScaledDelta) {
+                        res = perturbIterateBLAScaledArrays(
+                            zRefArray, escapeRadius2, blaEntriesArray,
+                            delta0, delta0LogScale,
+                            Complex!double(delta0Real, delta0Imag),
+                            desc.dwell
+                        );
                     } else {
-                        delta0LogScale = std.math.log10(cast(double)desc.radius);
+                        res = perturbIterateBLAArrays(
+                            zRefArray, escapeRadius2, blaEntriesArray, delta0, desc.dwell
+                        );
+                    }
+                    return res;
+                };
+
+                bool handled = false;
+                PerturbResult perturbResult;
+
+                switch (precisionMethod) {
+                    case PrecisionMethod.multidouble: {
+                        perturbResult = runDoublePerturb();
+                        handled = true;
+                        break;
+                    }
+                    case PrecisionMethod.bigfloat: {
+                        if (zRefArrayDD.length > 0) {
+                            import perturbation_bla_hp : perturbIterateBLADDComplex;
+                            perturbResult = perturbIterateBLADDComplex(
+                                zRefArrayDD, escapeRadius2, blaEntriesArray,
+                                delta0DD, desc.dwell
+                            );
+                            handled = true;
+                        }
+                        break;
+                    }
+                    case PrecisionMethod.gmp: {
+                        if (zRefArrayGMP.length > 0) {
+                            import perturbation_bla_hp : perturbIterateBLAGMP;
+                            perturbResult = perturbIterateBLAGMP(
+                                zRefArrayGMP, escapeRadius2, blaEntriesArray,
+                                delta0GMP, desc.dwell
+                            );
+                            handled = true;
+                        }
+                        break;
+                    }
+                    case PrecisionMethod.bigint: {
+                        if (zRefArrayBF.length > 0) {
+                            import perturbation_bla_hp : perturbIterateBLABigFloat;
+                            perturbResult = perturbIterateBLABigFloat(
+                                zRefArrayBF, escapeRadius2, blaEntriesArray,
+                                delta0BF, desc.dwell
+                            );
+                            handled = true;
+                        }
+                        break;
+                    }
+                    default: {
+                        perturbResult = runDoublePerturb();
+                        handled = true;
+                        break;
+                    }
+                }
+
+                if (handled) {
+                    iters[i][j] = IterResult(
+                        perturbResult.iterations,
+                        perturbResult.smoothed
+                    );
+                    if (allowSecondPass) {
+                        bool markUncertain = perturbResult.uncertain;
+                        if (uncertainMask.length > 0 && uncertainMask[i].length > 0) {
+                            uncertainMask[i][j] = markUncertain;
+                        }
                     }
                 } else {
-                    delta0 = Complex!double(delta0Real, delta0Imag);
+                    iters[i][j] = referencePixelIter;
+                    if (allowSecondPass) {
+                        uncertainMask[i][j] = false;
+                    }
                 }
-            }
-            
-            PerturbResult perturbResult;
-            if (precisionMethod == PrecisionMethod.multidouble && zRefArrayMD.length > 0) {
-                import perturbation_bla_hp : perturbIterateBLAMultiDouble;
-
-                MultiDoubleComplex delta0MD;
-                if (usingMultiDoubleConverter) {
-                    auto pixelC = pixelConverterMD.pixelToComplex(i, j);
-                    delta0MD = pixelC - cRefMD;
-                } else {
-                    delta0MD = MultiDoubleComplex(numDoublesForMD, delta0.re, delta0.im);
+            } else if (usedBigFloatFallback) {
+                iters[i][j] = IterResult(
+                    fallbackPerturb.iterations,
+                    fallbackPerturb.smoothed
+                );
+                if (allowSecondPass) {
+                    uncertainMask[i][j] = false;
                 }
-                
-                perturbResult = perturbIterateBLAMultiDouble(
-                    zRefArrayMD, escapeRadius2, blaEntriesArray, 
-                    delta0MD, desc.dwell, numDoublesForMD
-                );
-            } else if (useScaledDelta) {
-                perturbResult = perturbIterateBLAScaledArrays(
-                    zRefArray, escapeRadius2, blaEntriesArray, 
-                    delta0, delta0LogScale, desc.dwell,
-                    refOrbit.escaped ? refOrbit.refIterations : -1
-                );
             } else {
-                perturbResult = perturbIterateBLAArrays(
-                    zRefArray, escapeRadius2, blaEntriesArray, delta0, desc.dwell
-                );
-            }
-            
-            iters[i][j] = IterResult(
-                perturbResult.iterations,
-                perturbResult.smoothed
-            );
-            
-            static int debugPixelCount = 0;
-            if (debugPixelCount < 10 && i < 10 && j < 10) {
-                writeln("\n[ITER DEBUG] Pixel [", i, ",", j, "]: iterations=", perturbResult.iterations, 
-                        ", smoothed=", perturbResult.smoothed, ", maxIter=", desc.dwell);
-                debugPixelCount++;
+                iters[i][j] = referencePixelIter;
+                if (allowSecondPass) {
+                    uncertainMask[i][j] = false;
+                }
             }
             
             int current = atomicOp!"+="(processedPixels, 1);
@@ -683,149 +1045,228 @@ private void iterateGMPMode(ref IterResult[][] iters, const ref RenderConfig cfg
         }
     }
     writeln();
+
+    int minIterFirst = int.max;
+    int maxIterFirst = int.min;
+    long maxIterCountFirst = 0;
+    foreach (i; 0 .. desc.width) {
+        for (int j = 0; j < desc.height; j++) {
+            auto iterVal = iters[i][j].iterations;
+            if (iterVal < minIterFirst) {
+                minIterFirst = iterVal;
+            }
+            if (iterVal > maxIterFirst) {
+                maxIterFirst = iterVal;
+                maxIterCountFirst = 1;
+            } else if (iterVal == maxIterFirst) {
+                maxIterCountFirst++;
+            }
+        }
+    }
+    if (minIterFirst == int.max) minIterFirst = 0;
+    if (maxIterFirst == int.min) maxIterFirst = 0;
     
-    double radius;
-    try {
-        radius = to!double(desc.radiusStr);
-    } catch (Exception) {
-        radius = desc.radius;
+    bool forceDirectSecondPass = false;
+    if (allowSecondPass &&
+        precisionMethod == PrecisionMethod.multidouble &&
+        maxIterFirst == desc.dwell &&
+        maxIterCountFirst == totalPixels) {
+        writeln("All pixels reached the max iteration cap; forcing direct MultiDouble recomputation.");
+        forceDirectSecondPass = true;
+        foreach (i; 0 .. desc.width) {
+            foreach (j; 0 .. desc.height) {
+                uncertainMask[i][j] = true;
+            }
+        }
     }
     
-    bool hasNegativeExponent = desc.radiusStr.length > 0 && desc.radiusStr.indexOf("e-") >= 0;
-    bool needsSecondPass = (radius <= 1e-25 || hasNegativeExponent);
-    
-    if (needsSecondPass) {
-        writeln("Second pass: Recomputing uncertain pixels with higher precision...");
-        
+    if (allowSecondPass) {
         int uncertainCount = 0;
         foreach (i; 0 .. desc.width) {
-            for (int j = 0; j < desc.height; j++) {
-                if (iters[i][j].iterations >= cast(int)desc.dwell - 10) {
+            foreach (j; 0 .. desc.height) {
+                if (uncertainMask[i][j]) {
                     uncertainCount++;
                 }
             }
         }
-        
-        if (uncertainCount == 0) {
-            writeln("No uncertain pixels found, skipping second pass");
-        } else {
-            writeln("Found ", uncertainCount, " uncertain pixels (", 
-                   (uncertainCount * 100) / (desc.width * desc.height), "%)");
-            
-            if (precisionMethod == PrecisionMethod.multidouble) {
-                import multidouble : MultiDoublePixelConverter, MultiDoubleComplex, calculateNumDoubles;
+
+        if (uncertainCount > 0) {
+            writeln("Second pass: Recomputing ", uncertainCount, " uncertain pixels with higher precision...");
+            if (precisionMethod == PrecisionMethod.multidouble &&
+                numDoublesForMD > 0 &&
+                zRefArrayMD.length > 0) {
                 import perturbation_bla_hp : perturbIterateBLAMultiDouble;
-                uint digits = RenderConfig.calculateOptimalPrecision(radius, desc.width, desc.height);
-                uint currentDoubles = calculateNumDoubles(digits);
-                uint higherDoubles = min(currentDoubles + 2, 12u);
-                
-                if (higherDoubles > currentDoubles) {
-                    writeln("Second pass: Using ", higherDoubles, " doubles (was ", currentDoubles, ") for full MultiDouble perturbation");
+                import perturbation_bla_hp : iterateDirectMultiDouble;
+                auto radiusHigh = MultiDouble(numDoublesForMD, radiusStrForMD.length
+                    ? radiusStrForMD : format!"%.20g"(desc.radius));
+                auto twoHigh = MultiDouble(numDoublesForMD, 2.0);
+                auto pixelScaleHigh = radiusHigh * twoHigh;
 
-                    auto mdConverterHigher = MultiDoublePixelConverter(
-                        desc.width, desc.height,
-                        desc.originXStr, desc.originYStr, desc.radiusStr, higherDoubles
-                    );
-                    auto cRefMDHigher = MultiDoubleComplex(higherDoubles, refOrbit.cRef.re.toString(), refOrbit.cRef.im.toString());
-
-                    writeln("Recomputing reference orbit in ", higherDoubles, "-double precision for second pass...");
-                    import perturbation_bla_hp : computeReferenceOrbitMultiDouble;
-                    auto zRefArrayMDHigher = computeReferenceOrbitMultiDouble(
-                        desc.originXStr, desc.originYStr, desc.dwell, higherDoubles
-                    );
-                    writeln("Reference orbit recomputed: ", zRefArrayMDHigher.length, " points");
-                    
-                    int recomputed = 0;
-                    auto wRange2 = iota(0, desc.width);
-                    foreach (i; parallel(wRange2)) {
-                        for (int j = 0; j < desc.height; j++) {
-                            if (iters[i][j].iterations >= cast(int)desc.dwell - 10) {
-                                auto pixelC = mdConverterHigher.pixelToComplex(i, j);
-                                auto delta0MD = pixelC - cRefMDHigher;
-                                
-                                auto perturbResult = perturbIterateBLAMultiDouble(
-                                    zRefArrayMDHigher, escapeRadius2, blaEntriesArray, 
-                                    delta0MD, desc.dwell, higherDoubles
-                                );
-                                
-                                if (recomputed == 0) {
-                                    writeln("\n[FLOW DEBUG] Pixel [", i, ",", j, "]: iterations=", perturbResult.iterations, 
-                                            ", smoothed=", perturbResult.smoothed, 
-                                            ", glitched=", perturbResult.glitched);
-                                }
-                                
-                                iters[i][j] = IterResult(perturbResult.iterations, perturbResult.smoothed);
-                                recomputed++;
-                                if (recomputed % 100 == 0) {
-                                    write(".");
-                                    stdout.flush();
-                                }
-                            }
-                        }
-                    }
-                    writeln();
-                    writeln("Recomputed ", recomputed, " pixels with full ", higherDoubles, "-double precision perturbation");
-                } else {
-                    writeln("Already at maximum MultiDouble precision (", currentDoubles, " doubles)");
-                }
-            } else if (precisionMethod == PrecisionMethod.gmp) {
-                import gmp_arb : GMPFloat, GMPPixelConverter;
-                uint digits = RenderConfig.calculateOptimalPrecision(radius, desc.width, desc.height);
-                GMPFloat.setPrecisionDigits(digits + 50);
-                auto gmpConverter = GMPPixelConverter(
-                    desc.width, desc.height,
-                    desc.originXStr, desc.originYStr, desc.radiusStr
-                );
-                
-                int maxRecompute = min(uncertainCount, 50);
                 int recomputed = 0;
-                int skipped = 0;
-                
-                writeln("Recomputing up to ", maxRecompute, " pixels with GMP...");
-                auto wRange2 = iota(0, desc.width);
-                foreach (i; parallel(wRange2)) {
+                foreach (i; 0 .. desc.width) {
                     for (int j = 0; j < desc.height; j++) {
-                        if (iters[i][j].iterations >= cast(int)desc.dwell - 10) {
-                            if (recomputed < maxRecompute) {
-                                auto gmpResult = iterateGMPDirect(i, j, cfg, gmpConverter);
-                                iters[i][j] = gmpResult;
-                                recomputed++;
-                                if (recomputed % 10 == 0) {
-                                    write(".");
-                                    stdout.flush();
-                                }
-                            } else {
-                                skipped++;
-                            }
+                        if (!uncertainMask[i][j]) continue;
+                        auto relXMDHigh = MultiDouble(numDoublesForMD, relXValues[i]);
+                        auto relYMDHigh = MultiDouble(numDoublesForMD, relYValues[j]);
+                        auto delta0MDHigh = MultiDoubleComplex(
+                            relXMDHigh * pixelScaleHigh,
+                            relYMDHigh * pixelScaleHigh
+                        );
+                        PerturbResult perturbResult;
+                        if (forceDirectSecondPass) {
+                            auto cPixel = centerCoordMD + delta0MDHigh;
+                            perturbResult = iterateDirectMultiDouble(
+                                cPixel, desc.dwell, numDoublesForMD, escapeRadius2
+                            );
+                        } else {
+                            perturbResult = perturbIterateBLAMultiDouble(
+                                zRefArrayMD, escapeRadius2, blaEntriesArray,
+                                delta0MDHigh, desc.dwell, numDoublesForMD
+                            );
                         }
+                        iters[i][j] = IterResult(perturbResult.iterations, perturbResult.smoothed);
+                        uncertainMask[i][j] = false;
+                        recomputed++;
                     }
                 }
-                writeln();
-                writeln("Recomputed ", recomputed, " pixels with GMP precision");
-                if (skipped > 0) {
-                    writeln("Skipped ", skipped, " pixels to avoid hanging");
+                writeln("Second pass (MultiDouble) recomputed ", recomputed, " pixels.");
+            } else if (precisionMethod == PrecisionMethod.bigint && zRefArrayBF.length > 0) {
+                import perturbation_bla_hp : perturbIterateBLABigFloat;
+                int recomputed = 0;
+                foreach (i; 0 .. desc.width) {
+                    for (int j = 0; j < desc.height; j++) {
+                        if (!uncertainMask[i][j]) continue;
+                        auto deltaReBF = relXValuesBF[i] * pixelScaleBF;
+                        auto deltaImBF = relYValuesBF[j] * pixelScaleBF;
+                        auto deltaLocal = BigFloatComplex(deltaReBF, deltaImBF);
+                        auto perturbResult = perturbIterateBLABigFloat(
+                            zRefArrayBF, escapeRadius2, blaEntriesArray,
+                            deltaLocal, desc.dwell
+                        );
+                        iters[i][j] = IterResult(perturbResult.iterations, perturbResult.smoothed);
+                        uncertainMask[i][j] = false;
+                        recomputed++;
+                    }
                 }
+                writeln("Second pass (BigFloat) recomputed ", recomputed, " pixels.");
+            } else if (precisionMethod == PrecisionMethod.gmp && zRefArrayGMP.length > 0) {
+                import perturbation_bla_hp : perturbIterateBLAGMP;
+                int recomputed = 0;
+                foreach (i; 0 .. desc.width) {
+                    for (int j = 0; j < desc.height; j++) {
+                        if (!uncertainMask[i][j]) continue;
+                        auto deltaExact = pixelConverterGMP.pixelToComplex(i, j) - cRefGMP;
+                        auto perturbResult = perturbIterateBLAGMP(
+                            zRefArrayGMP, escapeRadius2, blaEntriesArray,
+                            deltaExact, desc.dwell
+                        );
+                        iters[i][j] = IterResult(perturbResult.iterations, perturbResult.smoothed);
+                        uncertainMask[i][j] = false;
+                        recomputed++;
+                    }
+                }
+                writeln("Second pass (GMP) recomputed ", recomputed, " pixels.");
             } else {
-                writeln("Skipping second pass - precision method ", precisionMethod, " doesn't support second pass yet");
+                writeln("Second pass skipped: no higher precision method available.");
+            }
+        } else {
+            writeln("No uncertain pixels found, skipping second pass");
+        }
+    }
+
+    int minIter = int.max;
+    int maxIter = int.min;
+    long maxIterCount = 0;
+    foreach (i; 0 .. desc.width) {
+        for (int j = 0; j < desc.height; j++) {
+            auto iterVal = iters[i][j].iterations;
+            if (iterVal < minIter) {
+                minIter = iterVal;
+            }
+            if (iterVal > maxIter) {
+                maxIter = iterVal;
+                maxIterCount = 1;
+            } else if (iterVal == maxIter) {
+                maxIterCount++;
             }
         }
     }
-    writeln();
+    if (minIter == int.max) {
+        minIter = 0;
+    }
+    if (maxIter == int.min) {
+        maxIter = 0;
+    }
+    writeln("Iteration stats: min=", minIter, ", max=", maxIter,
+            ", pixels at max=", maxIterCount, "/", desc.width * desc.height);
+
+    if ("MANDEL_VERIFY" in environment) {
+        writeln("MANDEL_VERIFY set; verifying sample pixels via direct GMP iteration...");
+        import gmp_arb : GMPPixelConverter;
+        auto verifyConverter = GMPPixelConverter(
+            desc.width, desc.height,
+            originXHP, originYHP, radiusHP
+        );
+        auto verifyOptions = determineGMPFractalOptions(cfg.multibrotExp);
+        Coord[] samples;
+        samples ~= Coord(desc.width / 2, desc.height / 2);
+        samples ~= Coord(desc.width / 4, desc.height / 4);
+        samples ~= Coord(3 * desc.width / 4, desc.height / 4);
+        samples ~= Coord(desc.width / 4, 3 * desc.height / 4);
+        samples ~= Coord(3 * desc.width / 4, 3 * desc.height / 4);
+        size_t verified = 0;
+        auto refPixel = verifyConverter.pixelToComplex(desc.width / 2, desc.height / 2);
+        MultiDoubleComplex cRefMD;
+        bool haveCRefMD = false;
+        if (precisionMethod == PrecisionMethod.multidouble && numDoublesForMD > 0) {
+            cRefMD = MultiDoubleComplex(numDoublesForMD, originXHP, originYHP);
+            haveCRefMD = true;
+        }
+        foreach (sample; samples) {
+            auto px = max(0, min(sample[0], desc.width - 1));
+            auto py = max(0, min(sample[1], desc.height - 1));
+            auto gmpResult = iterateGMPDirect(px, py, cfg, verifyConverter, verifyOptions);
+            auto perturbResult = iters[px][py];
+            auto diff = gmpResult.iterations - perturbResult.iterations;
+            auto diffSmooth = gmpResult.smoothed - perturbResult.smoothed;
+            writeln("  Pixel(", px, ",", py, "): perturb=", perturbResult.iterations,
+                    ", GMP=", gmpResult.iterations, ", diff=", diff,
+                    ", smooth diff=", format!"%.6f"(diffSmooth));
+            if (precisionMethod == PrecisionMethod.multidouble &&
+                haveCRefMD &&
+                relXValuesMD.length == desc.width &&
+                relYValuesMD.length == desc.height &&
+                px < relXValuesMD.length && py < relYValuesMD.length) {
+                auto deltaReMDComp = relXValuesMD[px] * pixelScaleMD;
+                auto deltaImMDComp = relYValuesMD[py] * pixelScaleMD;
+                auto deltaReMD = deltaReMDComp.toDouble();
+                auto deltaImMD = deltaImMDComp.toDouble();
+                auto pixelGMP = verifyConverter.pixelToComplex(px, py);
+                auto deltaGMPRe = (pixelGMP.re - refPixel.re).toDouble();
+                auto deltaGMPIm = (pixelGMP.im - refPixel.im).toDouble();
+                writeln("    Δapprox=( ", deltaReMD, ", ", deltaImMD, " ) vs Δexact=( ",
+                        deltaGMPRe, ", ", deltaGMPIm, " )");
+                auto cActualMD = MultiDoubleComplex(deltaReMDComp, deltaImMDComp) + cRefMD;
+                auto mdDirect = iterateDirectMultiDouble(
+                    cActualMD, desc.dwell, numDoublesForMD, refOrbit.escapeRadius2
+                );
+                writeln("    direct MultiDouble iterations=", mdDirect.iterations,
+                        ", diff vs perturb=", mdDirect.iterations - perturbResult.iterations);
+            }
+            verified++;
+        }
+        if (verified == 0) {
+            writeln("  No pixels verified (image too small).");
+        }
+    }
 }
 
 private void iterateGMPDirectMode(ref IterResult[][] iters, const ref RenderConfig cfg,
-                                                                    const ref RenderParams desc, int wfactor) {
+                                  const ref RenderParams desc, int wfactor) {
     import gmp_arb : GMPFloat, GMPPixelConverter;
     import core.atomic;
     
-    uint digits;
-    if (desc.radiusStr.length > 0) {
-        real radius = desc.radius;
-        digits = RenderConfig.calculateOptimalPrecision(radius, desc.width, desc.height);
-    } else {
-        auto coordLen = max(desc.originXStr.length, desc.originYStr.length);
-        digits = cast(uint)max(50, coordLen + 20);
-    }
+    uint digits = combinedPrecisionDigits(desc);
     
     GMPFloat.setPrecisionDigits(digits);
     auto converter = GMPPixelConverter(
@@ -833,92 +1274,118 @@ private void iterateGMPDirectMode(ref IterResult[][] iters, const ref RenderConf
         desc.originXStr, desc.originYStr, desc.radiusStr
     );
     
+    auto gmpOptions = determineGMPFractalOptions(cfg.multibrotExp);
+    bool gmpSupports = true;
+    final switch (cfg.fractalType) {
+        case FractalType.mandelbrot:
+            break;
+        case FractalType.ship:
+            break;
+        case FractalType.multibrot:
+        case FractalType.mandelbar:
+            gmpSupports = gmpOptions.hasIntegerPower;
+            break;
+    }
+    if (!gmpSupports) {
+        writeln("GMP direct iteration does not support ", cfg.fractalType,
+                " with exponent ", cfg.multibrotExp,
+                "; falling back to standard double precision for this render.");
+    }
+    
     auto wRange = iota(0, desc.width);
     foreach (i; parallel(wRange)) {
         for (int j = 0; j < desc.height; j++) {
-            iters[i][j] = iterateGMPDirect(i, j, cfg, converter);
+            if (gmpSupports) {
+                iters[i][j] = iterateGMPDirect(i, j, cfg, converter, gmpOptions);
+            } else {
+                iters[i][j] = iterate(i, j, cfg);
+            }
         }
     }
 }
 
 private void iterateWithProgress(ref IterResult[][] iters, const ref RenderConfig cfg,
-                                                                 const ref RenderParams desc, int wfactor) {
-    int loaded = 0;
-    if (exists(workdir ~ "/" ~ desc.filename ~ ".tmp")) {
-        writeln("-- Progress data found --");
-        auto progdata = cast(const(ubyte)[])read(workdir ~ "/" ~ desc.filename ~ ".tmp");
+                                 const ref RenderParams desc, int wfactor) {
+		int loaded = 0;
+		if (exists(workdir ~ "/" ~ desc.filename ~ ".tmp")) {
+			writeln("-- Progress data found --");
+			auto progdata = cast(const(ubyte)[])read(workdir ~ "/" ~ desc.filename ~ ".tmp");
         iters = decerealise!(IterResult[][])(progdata);
-        if (iters.length == desc.width) {
-            loaded = 0;
-            foreach (line; iters) {
-                if (line.length == desc.height) {
-                    loaded++;
-                } else {
-                    break;
-                }
-            }
-            writeln("-- Data loaded, ", loaded, " lines --");
-        } else {
+			if (iters.length == desc.width) {
+				loaded = 0;
+				foreach (line; iters) {
+					if (line.length == desc.height) {
+						loaded++;
+					} else {
+						break;
+					}
+				}
+				writeln("-- Data loaded, ", loaded, " lines --");
+			} else {
             iters = new IterResult[][](desc.width, desc.height);
         }
     }
-        
-    const int blockSize = saveProgress * wfactor;
+    
+		const int blockSize = saveProgress * wfactor;
     const int endp = to!int(ceil(desc.width / to!double(blockSize)));
-        
+    
     for (int block = 0; block < endp; block++) {
         auto blockEnd = (block + 1) * blockSize;
         auto wRange = iota(block * blockSize, min(blockEnd, desc.width));
 
-        foreach (i; parallel(wRange)) {
+			foreach (i; parallel(wRange)) {
             if (iters[i].length != desc.height || i >= loaded) {
                 for (int j = 0; j < desc.height; j++) {
                     iters[i][j] = iterate(i, j, cfg);
-                }
-            }
-
-            if (i % wfactor == 0) {
+					}
+				} 
+				if (i % wfactor == 0) {
                 write('.');
                 stdout.flush();
-            }
-        }
+				}
+			}
+        write(' ');
+        stdout.flush();
+
+			if (loaded >= blockEnd || desc.width <= blockEnd)
+				continue;
+
+			auto progdata = iters.cerealise;
+			std.file.write(workdir ~ "/" ~ desc.filename ~ ".tmp", progdata);
+        write("! ");
     }
-    write(' ');
-    stdout.flush();
-
-    if (loaded >= blockEnd || desc.width <= blockEnd)
-        continue;
-
-    auto progdata = iters.cerealise;
-    std.file.write(workdir ~ "/" ~ desc.filename ~ ".tmp", progdata);
-    write("! ");
+    
+    if (exists(workdir ~ "/" ~ desc.filename ~ ".tmp")) {
+		remove(workdir ~ "/" ~ desc.filename ~ ".tmp");
+    }
 }
 
 private void iterateBuddhabrot(ref IterResult[][] iters, const ref RenderConfig cfg,
-                                                             const ref RenderParams desc, int wfactor) {
+                               const ref RenderParams desc, int wfactor) {
     auto accumulator = BuddhaAccumulator(desc.width, desc.height);
+    
     auto numThreads = totalCPUs;
     int[][] localBuffers;
     localBuffers.length = numThreads;
-
+    
     foreach (i; 0 .. numThreads) {
         localBuffers[i] = new int[](desc.width * desc.height);
         localBuffers[i][] = 0;
     }
-
+    
     writeln("Using ", numThreads, " threads for Buddhabrot");
-
+    
     auto wRange = iota(0, desc.width);
     foreach (x; parallel(wRange)) {
         auto tid = x % numThreads;
-                
+        
         for (int y = 0; y < desc.height; y++) {
             auto result = iterateWithOrbit(x, y, cfg);
             iters[x][y] = result.iter;
-
+            
             bool shouldAccumulate = (desc.buddha == BuddhaMode.antibuddha) || 
-                                                            (result.iter.iterations < cfg.maxIterations);
-
+                                    (result.iter.iterations < cfg.maxIterations);
+            
             if (shouldAccumulate) {
                 foreach (point; result.orbit) {
                     auto pixel = complexToPixel(point[0], point[1], cfg);
@@ -935,7 +1402,7 @@ private void iterateBuddhabrot(ref IterResult[][] iters, const ref RenderConfig 
             stdout.flush();
         }
     }
-
+    
     writeln("\nMerging Buddhabrot data...");
 
     foreach (tid; 0 .. numThreads) {
@@ -945,12 +1412,12 @@ private void iterateBuddhabrot(ref IterResult[][] iters, const ref RenderConfig 
             }
         }
     }
-
+    
     int maxVal = accumulator.maxHits();
     writeln("Max buddha hits: ", maxVal);
-        
+    
     SuperImage buddhaImg = image(desc.width, desc.height);
-        
+    
     foreach (x; 0 .. desc.width) {
         for (int y = 0; y < desc.height; y++) {
             buddhaImg[x, y] = computeBuddhaColor(accumulator.data[x][y], maxVal);
@@ -960,7 +1427,7 @@ private void iterateBuddhabrot(ref IterResult[][] iters, const ref RenderConfig 
             stdout.flush();
         }
     }
-
+    
     string buddhaPrefix = desc.buddha == BuddhaMode.buddha ? "buddha_" : "antibuddha_";
     writeln("\nSaving: " ~ workdir ~ "/" ~ buddhaPrefix ~ desc.filename ~ ".png");
     savePNG(buddhaImg, workdir ~ "/" ~ buddhaPrefix ~ desc.filename ~ ".png");
@@ -971,16 +1438,16 @@ private void iterateBuddhabrot(ref IterResult[][] iters, const ref RenderConfig 
 // =============================================================================
 
 string generateFileName(RenderParams s) {
-        return to!string(s.fractalType) ~ 
-        "_X=" ~ format!"%.17g"(s.originX) ~
-        "_Y=" ~ format!"%.17g"(s.originY) ~
-        "_R=" ~ format!"%.17g"(s.radius) ~
-        "_W=" ~ to!string(s.width) ~
-        "_H=" ~ to!string(s.height) ~
-        "_I=" ~ to!string(s.dwell) ~ 
-        "_P=" ~ to!string(s.palette ? s.palette : s.dwell) ~ 
-        "_C=" ~ to!string(s.colorfunc) ~ 
-                (s.fractalType == FractalType.multibrot ? "_E=" ~ to!string(s.multibrotExp) : "");
+    return to!string(s.fractalType) ~ 
+    "_X=" ~ format!"%.17g"(s.originX) ~
+    "_Y=" ~ format!"%.17g"(s.originY) ~
+    "_R=" ~ format!"%.17g"(s.radius) ~
+    "_W=" ~ to!string(s.width) ~
+    "_H=" ~ to!string(s.height) ~
+    "_I=" ~ to!string(s.dwell) ~ 
+    "_P=" ~ to!string(s.palette ? s.palette : s.dwell) ~ 
+    "_C=" ~ to!string(s.colorfunc) ~ 
+        (s.fractalType == FractalType.multibrot ? "_E=" ~ to!string(s.multibrotExp) : "");
 }
 
 // =============================================================================
@@ -1022,32 +1489,33 @@ private bool isNonZeroNumber(JSONValue v) {
 
 RenderParams createBrotDesc(JSONValue s) {
     RenderParams ret;
+	
+	if (s.type != JSONType.object) return ret;
+
+    if ("width" in s && isNonZeroNumber(s["width"])) ret.width = getJsonInt(s["width"]);
+    if ("height" in s && isNonZeroNumber(s["height"])) ret.height = getJsonInt(s["height"]);
     
-    if (s.type != JSONType.object) return ret;
-        if ("width" in s && isNonZeroNumber(s["width"])) ret.width = getJsonInt(s["width"]);
-        if ("height" in s && isNonZeroNumber(s["height"])) ret.height = getJsonInt(s["height"]);
-        
-        if ("amp" in s && isNonZeroNumber(s["amp"])) {
-            ret.width = 16 * getJsonInt(s["amp"]);
-            ret.height = 16 * getJsonInt(s["amp"]);
-        }
+    if ("amp" in s && isNonZeroNumber(s["amp"])) {
+        ret.width = 16 * getJsonInt(s["amp"]);
+        ret.height = 16 * getJsonInt(s["amp"]);
+    }
     
-    if ("x1" in s && "x2" in s && "y1" in s && "y2" in s) {
+	if ("x1" in s && "x2" in s && "y1" in s && "y2" in s) {
         const auto x = (getJsonNumber(s["x1"]) + getJsonNumber(s["x2"])) / 2;
         const auto y = (getJsonNumber(s["y1"]) + getJsonNumber(s["y2"])) / 2;
-        const auto radX = max(getJsonNumber(s["x1"]), getJsonNumber(s["x2"]))
-                                        - min(getJsonNumber(s["x1"]), getJsonNumber(s["x2"]));
-        const auto radY = max(getJsonNumber(s["y1"]), getJsonNumber(s["y2"]))
-                                        - min(getJsonNumber(s["y1"]), getJsonNumber(s["y2"]));
+        const auto radX = max(getJsonNumber(s["x1"]), getJsonNumber(s["x2"])) - 
+                         min(getJsonNumber(s["x1"]), getJsonNumber(s["x2"]));
+        const auto radY = max(getJsonNumber(s["y1"]), getJsonNumber(s["y2"])) - 
+                         min(getJsonNumber(s["y1"]), getJsonNumber(s["y2"]));
 
-        ret.originX = x;
-        ret.originY = y;
-        ret.radius = max(radX, radY);
-        
-        ret.originXStr = format!"%.20g"(x);
-        ret.originYStr = format!"%.20g"(y);
-        ret.radiusStr = format!"%.20g"(ret.radius);
-    }
+		ret.originX = x;
+		ret.originY = y;
+		ret.radius = max(radX, radY);
+		
+		ret.originXStr = format!"%.20g"(x);
+		ret.originYStr = format!"%.20g"(y);
+		ret.radiusStr = format!"%.20g"(ret.radius);
+	}
 
     if ("x" in s) {
         if (s["x"].type == JSONType.string) {
@@ -1058,7 +1526,6 @@ RenderParams createBrotDesc(JSONValue s) {
             ret.originXStr = format!"%.20g"(ret.originX);
         }
     }
-
     if ("y" in s) {
         if (s["y"].type == JSONType.string) {
             ret.originYStr = s["y"].str;
@@ -1068,7 +1535,6 @@ RenderParams createBrotDesc(JSONValue s) {
             ret.originYStr = format!"%.20g"(ret.originY);
         }
     }
-    
     if ("radius" in s) {
         if (s["radius"].type == JSONType.string) {
             ret.radiusStr = s["radius"].str;
@@ -1078,14 +1544,13 @@ RenderParams createBrotDesc(JSONValue s) {
             ret.radiusStr = format!"%.20g"(ret.radius);
         }
     }
-        
-    // Force precision mode (optional: "standard", "arbitrary", "gmp", "double", etc.)
+    
     if ("precision" in s && s["precision"].type == JSONType.string) {
         ret.forcePrecision = s["precision"].str;
     } else if ("precisionMode" in s && s["precisionMode"].type == JSONType.string) {
         ret.forcePrecision = s["precisionMode"].str;
     }
-
+    
     if ("arbitrary_precision_method" in s && s["arbitrary_precision_method"].type == JSONType.string) {
         ret.arbitraryPrecisionMethod = s["arbitrary_precision_method"].str;
     } else if ("arbitraryPrecisionMethod" in s && s["arbitraryPrecisionMethod"].type == JSONType.string) {
@@ -1115,7 +1580,7 @@ RenderParams createBrotDesc(JSONValue s) {
             ret.radiusStr = format!"%.20g"(ret.radius);
         }
     }
-        
+    
     if ("dwell" in s && isNonZeroNumber(s["dwell"])) ret.dwell = getJsonInt(s["dwell"]);
     if ("palette" in s) ret.palette = getJsonInt(s["palette"]);
     if ("paletteOffset" in s) ret.paletteOffset = cast(float)getJsonNumber(s["paletteOffset"]);
@@ -1133,18 +1598,18 @@ RenderParams createBrotDesc(JSONValue s) {
     if ("multibrotExp" in s) ret.multibrotExp = cast(float)getJsonNumber(s["multibrotExp"]);
     
     if ("type" in s) ret.fractalType = to!FractalType(s["type"].str);
-    if ("colorfunc" in s) ret.colorfunc = to!ColorFunc(s["colorfunc"].str);
+	if ("colorfunc" in s) ret.colorfunc = to!ColorFunc(s["colorfunc"].str);
 
     if ("buddha" in s && s["buddha"].type == JSONType.true_) {
-            ret.buddha = BuddhaMode.buddha;
+        ret.buddha = BuddhaMode.buddha;
     } else if ("antibuddha" in s && s["antibuddha"].type == JSONType.true_) {
-            ret.buddha = BuddhaMode.antibuddha;
+        ret.buddha = BuddhaMode.antibuddha;
     }
     
     if ("autoDwell" in s && s["autoDwell"].type == JSONType.true_) {
         ret.autoDwell = true;
     }
-
+    
     if ("x_px_offset" in s) {
         ret.x_px_offset = getJsonInt(s["x_px_offset"]);
     }
@@ -1166,19 +1631,19 @@ RenderParams createBrotDesc(JSONValue s) {
 // =============================================================================
 
 void generateAnimateSequence(ref RenderParams[] queue, JSONValue animate) {
-    const int frames = to!int(animate["animate"].integer);
-    const int skip = "skip" in animate ? to!int(animate["skip"].integer) : 0;
+	const int frames = to!int(animate["animate"].integer);
+	const int skip = "skip" in animate ? to!int(animate["skip"].integer) : 0;
     const RenderParams fromParams = createBrotDesc(animate["from"]);
     const RenderParams toParams = createBrotDesc(animate["to"]);
     const int w = fromParams.width;
     const int h = fromParams.height;
 
-    const string fpath = "animate_FRAMES=" ~ to!string(frames) ~ 
-        "_W=" ~ to!string(w) ~ "_H=" ~ to!string(h) ~
+	const string fpath = "animate_FRAMES=" ~ to!string(frames) ~ 
+		"_W=" ~ to!string(w) ~ "_H=" ~ to!string(h) ~
         "_X0=" ~ format!"%.17g"(fromParams.originX) ~ "_Y0=" ~ 
         format!"%.17g"(fromParams.originY) ~ "_Rn=" ~ format!"%.17g"(toParams.radius) ~ "/";
 
-    if (!(workdir ~ "/" ~ fpath).exists) (workdir ~ "/" ~ fpath).mkdir;
+	if (!(workdir ~ "/" ~ fpath).exists) (workdir ~ "/" ~ fpath).mkdir;
 
     const double deltaX = (toParams.originX - fromParams.originX) / to!double(frames);
     const double deltaY = (toParams.originY - fromParams.originY) / to!double(frames);
@@ -1187,83 +1652,86 @@ void generateAnimateSequence(ref RenderParams[] queue, JSONValue animate) {
     const float deltaPalette = (log(cast(double)(toParams.palette ? toParams.palette : toParams.dwell)) - 
         log(cast(double)(fromParams.palette ? fromParams.palette : fromParams.dwell))) / to!double(frames);
     const float deltaExp = (toParams.multibrotExp - fromParams.multibrotExp) / to!double(frames);
-        
+    
     for (int i = 0; i <= frames; i++) {
-        if (i < skip) continue;
-        
+		if (i < skip) continue;
+		
         RenderParams ret;
 
-        ret.width = w;
-        ret.height = h;
+		ret.width = w;
+		ret.height = h;
         ret.originX = fromParams.originX + deltaX * i;
         ret.originY = fromParams.originY + deltaY * i;
         ret.radius = exp(log(fromParams.radius) + deltaRadius * i);
+        
         ret.originXStr = format!"%.20g"(ret.originX);
         ret.originYStr = format!"%.20g"(ret.originY);
         ret.radiusStr = format!"%.20g"(ret.radius);
+        
         ret.dwell = cast(int)exp(log(cast(double)fromParams.dwell) + deltaDwell * i);
         ret.palette = cast(int)exp(log(cast(double)fromParams.palette) + deltaPalette * i);
+        
         ret.multibrotExp = fromParams.multibrotExp + (deltaExp * i);
         
         ret.fractalType = fromParams.fractalType;
         ret.colorfunc = fromParams.colorfunc;
         ret.buddha = fromParams.buddha;
 
-        ret.filename = fpath ~ "frame_" ~ format!"%06d"(i);
+		ret.filename = fpath ~ "frame_" ~ format!"%06d"(i);
 
         queue ~= ret;
-    }
+	}
 }
 
 void generateChunksSequence(ref RenderParams[] queue, JSONValue source) {
-    const int chunks = to!int(source["chunks"].integer);
+	const int chunks = to!int(source["chunks"].integer);
     const RenderParams s = createBrotDesc(source);
 
-    const string fpath = "CHUNKED=" ~ to!string(chunks) ~ "_" ~ s.filename ~ "/";
+	const string fpath = "CHUNKED=" ~ to!string(chunks) ~ "_" ~ s.filename ~ "/";
 
-    if (!(workdir ~ "/" ~ fpath).exists) (workdir ~ "/" ~ fpath).mkdir;
+	if (!(workdir ~ "/" ~ fpath).exists) (workdir ~ "/" ~ fpath).mkdir;
 
     if (s.buddha != BuddhaMode.none) {
-        if (!(workdir ~ "/" ~ to!string(s.buddha) ~ "_" ~ fpath).exists) 
-            (workdir ~ "/" ~ to!string(s.buddha) ~ "_" ~ fpath).mkdir;
-    }
+		if (!(workdir ~ "/" ~ to!string(s.buddha) ~ "_" ~ fpath).exists) 
+			(workdir ~ "/" ~ to!string(s.buddha) ~ "_" ~ fpath).mkdir;
+	}
 
     const int w = cast(int)(s.width / to!double(chunks));
     const int h = cast(int)(s.height / to!double(chunks));
 
     const double diff = cast(double)(min(w, h)) / max(w, h);
-    const double radiusX = s.radius * (w > h ? 1 : diff) / to!double(chunks);
-    const double radiusY = s.radius * (w < h ? 1 : diff) / to!double(chunks);
+  const double radiusX = s.radius * (w > h ? 1 : diff) / to!double(chunks);
+  const double radiusY = s.radius * (w < h ? 1 : diff) / to!double(chunks);
 
     const double x1 = s.originX - (s.radius * (w > h ? 1 : diff) / to!double(chunks)) * (chunks / 2 + 2);
     const double y1 = s.originY + (s.radius * (w < h ? 1 : diff) / to!double(chunks)) * (chunks / 2 + 2);
-        
+    
     for (int i = 0; i < chunks; i++) {
         for (int j = 0; j < chunks; j++) {
             RenderParams ret;
 
-            ret.width = w;
-            ret.height = h;
-            ret.originX = x1 + radiusX * 2 * (j + 0.5);
-            ret.originY = y1 - radiusY * 2 * (i + 0.5);
-            ret.radius = min(radiusX, radiusY);
-                        
+			ret.width = w;
+			ret.height = h;
+			ret.originX = x1 + radiusX * 2 * (j + 0.5);
+			ret.originY = y1 - radiusY * 2 * (i + 0.5);
+			ret.radius = min(radiusX, radiusY);
+            
             ret.originXStr = format!"%.20g"(ret.originX);
             ret.originYStr = format!"%.20g"(ret.originY);
             ret.radiusStr = format!"%.20g"(ret.radius);
 
-            ret.dwell = s.dwell;
-            ret.palette = s.palette;
+			ret.dwell = s.dwell;
+			ret.palette = s.palette;
 
-            ret.multibrotExp = s.multibrotExp;
+			ret.multibrotExp = s.multibrotExp;
 
             ret.fractalType = s.fractalType;
-            ret.colorfunc = s.colorfunc;
-            ret.buddha = s.buddha;
+			ret.colorfunc = s.colorfunc;
+			ret.buddha = s.buddha;
 
             ret.filename = fpath ~ "chunk_" ~ format!"%06d"(i * chunks + j);
 
             queue ~= ret;
-        }
-    }
+		}
+	}
 }

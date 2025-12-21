@@ -19,9 +19,10 @@ import std.algorithm;
 import std.typecons;
 
 // Import precision implementations
-import bigfloat : DoubleDouble, DDComplex;
+import doubledouble : DoubleDouble, DDComplex;
 import multidouble : MultiDouble, MultiDoubleComplex, calculateNumDoubles;
-import gmp_arb : GMPFloat, GMPComplex;  // GMP is a dependency, always available
+import gmp_arb : GMPFloat, GMPComplex;
+import bigfloat : BigFloat, BigFloatComplex;
 
 // Complex number as tuple (matching mandel.d)
 alias Complex = Tuple!(real, real);
@@ -31,8 +32,8 @@ enum PrecisionMethod {
     auto_,      // Auto-select based on requirements (default)
     double_,    // Standard double precision
     bigfloat,   // Double-double precision (DoubleDouble)
-    multidouble, // Multi-double precision (3-12 doubles)
-    bigint,     // BigInt-based arbitrary precision (not yet implemented)
+    multidouble, // Multi-double precision (3-40 doubles)
+    bigint,     // BigInt-based arbitrary precision (pure D fallback)
     gmp         // GMP-based arbitrary precision
 }
 
@@ -61,7 +62,7 @@ PrecisionMethod parsePrecisionMethod(string method) {
 ///   - 16-50 digits: bigfloat (double-double) - Theoretical: ~31 digits, Practical: ~50 digits
 ///   - 51-240 digits: multidouble (3-12 doubles) - Theoretical: ~180 digits (12 doubles), Practical: ~240 digits
 ///   - 241+ digits: GMP/bigint
-PrecisionMethod selectPrecisionMethod(uint requiredDigits, PrecisionMethod arbitraryMethod = PrecisionMethod.gmp) {
+PrecisionMethod selectPrecisionMethod(uint requiredDigits, PrecisionMethod arbitraryMethod = PrecisionMethod.bigint) {
     // Import thresholds from flow.d if available, otherwise use defaults
     version (HaveFlowConstants) {
         import flow : PRECISION_THRESHOLD_DOUBLE, PRECISION_THRESHOLD_BIGFLOAT, 
@@ -73,8 +74,8 @@ PrecisionMethod selectPrecisionMethod(uint requiredDigits, PrecisionMethod arbit
     } else {
         enum uint THRESHOLD_DOUBLE = 15;
         enum uint THRESHOLD_BIGFLOAT = 32;
-        enum uint THRESHOLD_MULTIDOUBLE = 240;
-        enum uint THRESHOLD_GMP = 241;
+        enum uint THRESHOLD_MULTIDOUBLE = 600;
+        enum uint THRESHOLD_GMP = 601;
     }
     
     if (requiredDigits <= THRESHOLD_DOUBLE) {
@@ -82,7 +83,7 @@ PrecisionMethod selectPrecisionMethod(uint requiredDigits, PrecisionMethod arbit
     } else if (requiredDigits <= THRESHOLD_BIGFLOAT) {
         return PrecisionMethod.bigfloat;  // Double-double precision (~31 digits)
     } else if (requiredDigits <= THRESHOLD_MULTIDOUBLE) {
-        return PrecisionMethod.multidouble;  // Multi-double precision (3-12 doubles, ~33-180 digits)
+        return PrecisionMethod.multidouble;  // Multi-double precision (3-40 doubles, up to ~600 digits)
     } else {
         // For very high precision (>THRESHOLD_MULTIDOUBLE digits), use specified arbitrary precision method
         // Default is GMP (faster), but can be set to bigint if preferred
@@ -93,15 +94,18 @@ PrecisionMethod selectPrecisionMethod(uint requiredDigits, PrecisionMethod arbit
 /// Unified complex number wrapper
 /// Automatically uses the fastest precision method that meets requirements
 struct UnifiedComplex {
+    @disable this(this);
     private Complex _double;
     private DDComplex _bigfloat;
     private MultiDoubleComplex _multidouble;
     private GMPComplex _gmp;
+    private BigFloatComplex _bigintValue;
     private PrecisionMethod _method;
     private bool _isDouble;
     private bool _isBigFloat;
     private bool _isMultiDouble;
     private bool _isGMP;
+    private bool _isBigInt;
     
     /// Create from method and strings
     this(PrecisionMethod method, string realStr, string imagStr) {
@@ -110,6 +114,7 @@ struct UnifiedComplex {
         _isBigFloat = false;
         _isMultiDouble = false;
         _isGMP = false;
+        _isBigInt = false;
         
         final switch (method) {
             case PrecisionMethod.double_:
@@ -130,10 +135,8 @@ struct UnifiedComplex {
                 _isGMP = true;
                 break;
             case PrecisionMethod.bigint:
-                // BigInt not yet implemented, fall back to GMP
-                _gmp = GMPComplex(realStr, imagStr);
-                _method = PrecisionMethod.gmp;
-                _isGMP = true;
+                _bigintValue = BigFloatComplex(realStr, imagStr);
+                _isBigInt = true;
                 break;
             case PrecisionMethod.auto_:
                 // Should not reach here - auto should be resolved before construction
@@ -151,6 +154,7 @@ struct UnifiedComplex {
         _isBigFloat = false;
         _isMultiDouble = false;
         _isGMP = false;
+        _isBigInt = false;
         
         final switch (method) {
             case PrecisionMethod.double_:
@@ -171,9 +175,8 @@ struct UnifiedComplex {
                 _isGMP = true;
                 break;
             case PrecisionMethod.bigint:
-                _gmp = GMPComplex(realVal, imagVal);
-                _method = PrecisionMethod.gmp;
-                _isGMP = true;
+                _bigintValue = BigFloatComplex(BigFloat(realVal), BigFloat(imagVal));
+                _isBigInt = true;
                 break;
             case PrecisionMethod.auto_:
                 _double = Complex(realVal, imagVal);
@@ -198,9 +201,10 @@ struct UnifiedComplex {
             return _multidouble.toDoubleComplex();
         } else if (_isGMP) {
             return Complex(_gmp.re.toDouble(), _gmp.im.toDouble());
-        } else {
-            return _double;  // Fallback
+        } else if (_isBigInt) {
+            return Complex(_bigintValue.re.toDouble(), _bigintValue.im.toDouble());
         }
+        return _double;
     }
     
     /// Magnitude squared (as double, for escape checks)
@@ -213,9 +217,10 @@ struct UnifiedComplex {
             return _multidouble.magnitudeSquared();
         } else if (_isGMP) {
             return _gmp.magnitudeSquaredDouble();
-        } else {
-            return _double[0] * _double[0] + _double[1] * _double[1];  // Fallback
+        } else if (_isBigInt) {
+            return _bigintValue.magnitudeSquared().toDouble();
         }
+        return _double[0] * _double[0] + _double[1] * _double[1];
     }
     
     /// In-place square and add: z = z² + c (optimized)
@@ -235,6 +240,9 @@ struct UnifiedComplex {
                 _multidouble.squareAndAdd(MultiDoubleComplex(_multidouble.re.numComponents(), cDouble[0], cDouble[1]));
             } else if (_isGMP) {
                 _gmp.squareAndAdd(GMPComplex(cDouble[0], cDouble[1]));
+            } else if (_isBigInt) {
+                auto cBig = BigFloatComplex(BigFloat(cDouble[0]), BigFloat(cDouble[1]));
+                _bigintValue = _bigintValue.square() + cBig;
             }
             return;
         }
@@ -251,6 +259,8 @@ struct UnifiedComplex {
             _multidouble.squareAndAdd(c._multidouble);
         } else if (_isGMP) {
             _gmp.squareAndAdd(c._gmp);
+        } else if (_isBigInt) {
+            _bigintValue = _bigintValue.square() + c._bigintValue;
         }
     }
     
@@ -266,7 +276,7 @@ struct UnifiedComplex {
             case PrecisionMethod.gmp:
                 return UnifiedComplex(method, 0.0, 0.0);
             case PrecisionMethod.bigint:
-                return UnifiedComplex(PrecisionMethod.gmp, 0.0, 0.0);
+                return UnifiedComplex(method, 0.0, 0.0);
             default:
                 return UnifiedComplex(PrecisionMethod.double_, 0.0, 0.0);
         }
@@ -333,4 +343,3 @@ uint estimatePrecisionFromString(string realStr, string imagStr) {
     
     return maxDigits;
 }
-
