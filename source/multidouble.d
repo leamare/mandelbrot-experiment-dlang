@@ -600,21 +600,15 @@ struct MultiDoublePixelConverter {
     }
     
     MultiDoubleComplex pixelToComplex(int px, int py) const {
-        double relX = (cast(double)px / minDim) * 2.0 - (1.0 + di);
-        double relY = (cast(double)py / minDim) * 2.0 - (1.0 + dr);
-
-        MultiDouble relXMD = MultiDouble(numDoubles, relX);
-        MultiDouble relYMD = MultiDouble(numDoubles, relY);
-        
-        MultiDouble offsetX = radius * relXMD;
-        MultiDouble offsetY = radius * relYMD;
-        
-        MultiDouble cReal = originX + offsetX;
-        MultiDouble cImag = originY + offsetY;
+        MultiDouble pxMD = MultiDouble(numDoubles, cast(double)px);
+        MultiDouble pyMD = MultiDouble(numDoubles, cast(double)py);
+        MultiDouble relX = (pxMD * scale) - (originX + radius * MultiDouble(numDoubles, cast(double)(1.0 + di)));
+        MultiDouble relY = (pyMD * scale) + (originY + radius * MultiDouble(numDoubles, cast(double)(1.0 + dr)));
         
         MultiDoubleComplex result;
-        result.re = cReal;
-        result.im = cImag;
+        result.re = relX;
+        result.im = relY;
+
         return result;
     }
 }
