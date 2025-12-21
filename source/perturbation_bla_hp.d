@@ -113,6 +113,10 @@ PerturbResult perturbIterateBLAMultiDouble(
     uint numDoubles
 ) {
     PerturbResult result;
+    import std.process : environment;
+    import std.stdio : writeln;
+    bool tracePixel = "MANDEL_TRACE_PIXEL" in environment;
+    bool disableBLA = "MANDEL_DISABLE_BLA" in environment;
 
     const size_t zRefLength = zRefArray.length;
     const size_t blaEntriesLength = blaEntriesArray.length;
@@ -149,6 +153,11 @@ PerturbResult perturbIterateBLAMultiDouble(
         double zMag2 = z.magnitudeSquared();
         double deltaMag2 = delta.magnitudeSquared();
 
+        double deltaMag = sqrt(deltaMag2);
+        if (tracePixel && iter % 64 == 0) {
+            writeln("[md delta] iter=", iter, " |delta|=", deltaMag);
+        }
+
         if (!(zMag2 == zMag2) || zMag2 == double.infinity || zMag2 < 0.0) {
             double logZn = std.math.log(escapeRadius2 * 2.0) * 0.5;
             double nu = std.math.log(logZn / std.math.log(2.0)) / std.math.log(2.0);
@@ -176,8 +185,8 @@ PerturbResult perturbIterateBLAMultiDouble(
                     return result;
                 }
             }
+            continue;
         }
-
         double refMag2 = zRef.magnitudeSquared();
         bool refHasEscaped = (refMag2 > escapeRadius2);
 
@@ -205,7 +214,6 @@ PerturbResult perturbIterateBLAMultiDouble(
 
         if (!refHasEscaped && deltaMag2 > escapeRadius2 * 0.1) {
             double refMag = sqrt(refMag2);
-            double deltaMag = sqrt(deltaMag2);
             double worstCaseMag2 = (refMag + deltaMag) * (refMag + deltaMag);
             if (worstCaseMag2 > escapeRadius2) {
                 if (escapeIter < 0) {
@@ -215,7 +223,7 @@ PerturbResult perturbIterateBLAMultiDouble(
             }
         }
 
-        if (!usingLastRef && refIter + 1 < cast(int)maxRefIter && blaEntriesLength > 0) {
+        if (!disableBLA && !usingLastRef && refIter + 1 < cast(int)maxRefIter && blaEntriesLength > 0) {
             int blaIdx = BLATable.findBestInEntries(blaEntriesArray, refIter, sqrt(deltaMag2));
 
             if (blaIdx >= 0 && blaIdx < cast(int)blaEntriesLength) {
@@ -326,6 +334,9 @@ PerturbResult perturbIterateBLABigFloat(
     uint maxIterations
 ) {
     PerturbResult result;
+    import std.process : environment;
+    import std.stdio : writeln;
+    bool disableBLA = "MANDEL_DISABLE_BLA" in environment;
 
     const size_t zRefLength = zRefArray.length;
     const size_t blaEntriesLength = blaEntriesArray.length;
@@ -390,7 +401,7 @@ PerturbResult perturbIterateBLABigFloat(
             return result;
         }
 
-        if (!usingLastRef && refIter + 1 < cast(int)maxRefIter && blaEntriesLength > 0) {
+        if (!disableBLA && !usingLastRef && refIter + 1 < cast(int)maxRefIter && blaEntriesLength > 0) {
             double deltaMag = std.math.sqrt(deltaMag2);
             int blaIdx = BLATable.findBestInEntries(blaEntriesArray, refIter, deltaMag);
             if (blaIdx >= 0 && blaIdx < cast(int)blaEntriesLength) {
@@ -428,6 +439,124 @@ PerturbResult perturbIterateBLABigFloat(
     return result;
 }
 
+/// Hybrid perturbation: use MultiDouble for delta only, with double reference orbit.
+PerturbResult perturbIterateBLAMultiDoubleDelta(
+    const Complex!double[] zRefArray,
+    const double escapeRadius2,
+    const BLAEntry[] blaEntriesArray,
+    MultiDoubleComplex delta0,
+    uint maxIterations,
+    uint numDoubles
+) {
+    PerturbResult result;
+    import std.process : environment;
+    import std.stdio : writeln;
+    bool tracePixel = "MANDEL_TRACE_PIXEL" in environment;
+    bool disableBLA = "MANDEL_DISABLE_BLA" in environment;
+    const size_t zRefLength = zRefArray.length;
+    const size_t blaEntriesLength = blaEntriesArray.length;
+
+    if (zRefLength < 2) {
+        result.iterations = cast(int)maxIterations;
+        result.smoothed = cast(double)maxIterations;
+        result.glitched = true;
+        result.uncertain = false;
+        return result;
+    }
+
+    const double rebaseThreshold = 1e-10;
+    auto delta = delta0;
+    int iter = 0;
+    int refIter = 0;
+    size_t maxRefIter = zRefLength;
+    bool usingLastRef = false;
+
+    while (iter < maxIterations) {
+        if (refIter >= cast(int)maxRefIter) {
+            if (maxRefIter == 0) break;
+            refIter = cast(int)maxRefIter - 1;
+            usingLastRef = true;
+        }
+        if (refIter < 0 || refIter >= cast(int)maxRefIter) break;
+
+        Complex!double zRef = zRefArray[refIter];
+        auto z = MultiDoubleComplex(numDoubles, zRef.re, zRef.im) + delta;
+        double zMag2 = z.magnitudeSquared();
+        double deltaMag2 = delta.magnitudeSquared();
+
+        double deltaMag = sqrt(deltaMag2);
+        if (tracePixel && iter % 64 == 0) {
+            writeln("[md delta] iter=", iter, " |delta|=", deltaMag);
+        }
+
+        if (zMag2 > escapeRadius2) {
+            double logZn = std.math.log(zMag2) * 0.5;
+            double nu = std.math.log(logZn / std.math.log(2.0)) / std.math.log(2.0);
+            result.iterations = iter;
+            result.smoothed = 1 + cast(double)iter - nu;
+            result.glitched = false;
+            result.uncertain = false;
+            return result;
+        }
+
+        if (zMag2 < deltaMag2 * rebaseThreshold) {
+            delta = z;
+            refIter = 0;
+            usingLastRef = false;
+            continue;
+        }
+
+        // (Growth-based rebase removed to avoid infinite rebasing loops)
+
+        bool usedBLA = false;
+        if (!disableBLA && !usingLastRef && refIter + 1 < cast(int)maxRefIter && blaEntriesLength > 0) {
+            int blaIdx = BLATable.findBestInEntries(blaEntriesArray, refIter, sqrt(deltaMag2));
+            if (blaIdx >= 0 && blaIdx < cast(int)blaEntriesLength) {
+                const BLAEntry entry = blaEntriesArray[blaIdx];
+                if (entry.skipCount <= 32) {
+                    double radius = entry.radius;
+                    if (radius > 0 && deltaMag2 < radius * radius) {
+                        auto nextDelta = entry.A_multiDouble * delta + entry.B_multiDouble * delta0;
+                        double nextMag2 = nextDelta.magnitudeSquared();
+                        if (nextMag2 == nextMag2 && nextMag2 != double.infinity && nextMag2 < radius * radius * 16) {
+                            delta = nextDelta;
+                            iter += entry.skipCount;
+                            refIter += entry.skipCount;
+                            if (refIter >= cast(int)maxRefIter) {
+                                refIter = cast(int)maxRefIter - 1;
+                                usingLastRef = true;
+                            }
+                            usedBLA = true;
+                            continue;
+                        }
+                    }
+                }
+            }
+        }
+
+        if (!usedBLA) {
+            Complex!double twoZref = zRef * 2.0;
+            auto deltaSq = delta;
+            deltaSq.square(); // δ^2
+            delta = MultiDoubleComplex(numDoubles, twoZref.re, twoZref.im) * delta + deltaSq + delta0;
+            iter++;
+            if (!usingLastRef) {
+                refIter++;
+                if (refIter >= cast(int)maxRefIter) {
+                    refIter = cast(int)maxRefIter - 1;
+                    usingLastRef = true;
+                }
+            }
+        }
+    }
+
+    result.iterations = iter;
+    result.smoothed = cast(double)iter;
+    result.glitched = false;
+    result.uncertain = true; // mark for higher precision if needed
+    return result;
+}
+
 /// High-precision perturbation iteration using DDComplex (bigfloat)
 PerturbResult perturbIterateBLADDComplex(
     const DDComplex[] zRefArray,
@@ -437,6 +566,8 @@ PerturbResult perturbIterateBLADDComplex(
     uint maxIterations
 ) {
     PerturbResult result;
+    import std.process : environment;
+    bool disableBLA = "MANDEL_DISABLE_BLA" in environment;
     
     const size_t zRefLength = zRefArray.length;
     const size_t blaEntriesLength = blaEntriesArray.length;
@@ -492,7 +623,7 @@ PerturbResult perturbIterateBLADDComplex(
         }
         
         // Try BLA
-        if (!usingLastRef && refIter + 1 < cast(int)maxRefIter && blaEntriesLength > 0) {
+        if (!disableBLA && !usingLastRef && refIter + 1 < cast(int)maxRefIter && blaEntriesLength > 0) {
             int blaIdx = BLATable.findBestInEntries(blaEntriesArray, refIter, sqrt(deltaMag2));
             
             if (blaIdx >= 0 && blaIdx < cast(int)blaEntriesLength) {

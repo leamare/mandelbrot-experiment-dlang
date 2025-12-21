@@ -1072,8 +1072,11 @@ PerturbResult perturbIterateBLAScaledArrays(
         
         double deltaMagActual = sqrt(deltaMag2Actual);
         
+        // Disable BLA when we're in deep scaled territory; it tends to skip over
+        // the region where we need rebasing the most.
         bool usedBLA = false;
-        if (scaleUsable && currentLogScale > -300.0 &&
+        bool allowBLA = scaleUsable && currentLogScale > -12.0;
+        if (allowBLA &&
             !usingLastRef && refIter + 1 < cast(int)maxRefIter &&
             blaEntriesLength > 0 && deltaMagActual > 0) {
             int blaIdx = BLATable.findBestInEntries(
@@ -1118,18 +1121,33 @@ PerturbResult perturbIterateBLAScaledArrays(
             Complex!double currentZRef = zRefArray[refIter];
             auto twoZref = currentZRef * 2.0;
             
-            auto deltaSqActual = Complex!double(
-                deltaActual.re * deltaActual.re - deltaActual.im * deltaActual.im,
-                2.0 * deltaActual.re * deltaActual.im
+            // Use scaled accumulation to avoid underflow of the quadratic term:
+            // δ_{n+1} = 2 Z_ref δ + δ^2 + δ0, but δ and δ0 may be extremely small.
+            // Represent all terms as mantissa + logScale and add them safely.
+            Complex!double accum = Complex!double(
+                (twoZref.re * deltaActual.re - twoZref.im * deltaActual.im) / currentScale,
+                (twoZref.re * deltaActual.im + twoZref.im * deltaActual.re) / currentScale
             );
-            auto nextDeltaActual = twoZref * deltaActual + deltaSqActual + delta0Exact;
-            delta = Complex!double(
-                nextDeltaActual.re / currentScale,
-                nextDeltaActual.im / currentScale
+            double accumLogScale = currentLogScale;
+            double accumScale = currentScale;
+
+            // Quadratic term uses normalized delta with doubled scale.
+            auto deltaSqNorm = Complex!double(
+                delta.re * delta.re - delta.im * delta.im,
+                2.0 * delta.re * delta.im
             );
+            addScaledTerm(accum, accumLogScale, accumScale, deltaSqNorm, currentLogScale * 2.0);
+
+            // Add delta0 in the same scaled units as accum
+            auto delta0Scaled = Complex!double(delta0Exact.re / currentScale, delta0Exact.im / currentScale);
+            addScaledTerm(accum, accumLogScale, accumScale, delta0Scaled, currentLogScale);
+
+            delta = accum;
+            currentLogScale = accumLogScale;
+            currentScale = pow10Clamped(currentLogScale);
             renormalizeScaledDelta(delta, currentLogScale, currentScale);
 
-            
+
             iter++;
             if (!usingLastRef) {
                 refIter++;
@@ -1143,8 +1161,8 @@ PerturbResult perturbIterateBLAScaledArrays(
     
     result.iterations = iter;
     result.smoothed = cast(double)iter;
-    result.glitched = forcedApproximation || usingLastRef;
-    result.uncertain = true; // Mark for high-precision fallback if we didn't escape
+    result.glitched = true;
+    result.uncertain = true;
     return result;
 }
 
