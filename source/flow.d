@@ -10,7 +10,7 @@ import std.json;
 import std.array;
 import std.range;
 import std.parallelism;
-import std.algorithm : min, max, countUntil;
+import std.algorithm : min, max, countUntil, map;
 import std.format : format;
 import std.process : environment;
 
@@ -276,7 +276,7 @@ double digitsPerPixel(const RenderParams desc) {
     }
     double logMaxDim = log10(cast(double)maxDim);
     double logPixelSpacing = log10(2.0) + exp - logMaxDim;
-    return -logPixelSpacing;
+    return -logPixelSpacing * 1.25;
 }
 
 uint viewportPrecisionDigits(const RenderParams desc) {
@@ -344,6 +344,31 @@ private string trimCoordinatePrecision(string value, uint maxFractionDigits) {
         trimmed = trimmed[0 .. $ - 1];
     }
     return trimmed ~ exponentPart;
+}
+
+private string bigFloatToString(const BigFloat bf, uint maxDigits) {
+    import std.format : format;
+    import std.bigint : BigInt;
+    if (bf.mantissa == 0) return "0";
+    
+    BigInt absMant = bf.mantissa < 0 ? -bf.mantissa : bf.mantissa;
+    string mantStr = absMant.to!string();
+    
+    long totalExp = bf.exponent + cast(long)(mantStr.length - 1);
+    string result;
+    if (mantStr.length == 1) {
+        result = mantStr;
+    } else {
+        result = mantStr[0] ~ "." ~ mantStr[1..$];
+        if (result.length > maxDigits + 2) {
+            result = result[0..maxDigits+2];
+        }
+    }
+    result ~= "e" ~ to!string(totalExp);
+    if (bf.mantissa < 0) {
+        result = "-" ~ result;
+    }
+    return result;
 }
 
 double computeLog10FromDecimal(string value, double fallbackValue) {
@@ -443,7 +468,8 @@ uint selectMultiDoubleComponents(uint digits, const RenderParams desc) {
 
 uint selectDeltaMultiDoubleComponents(double perPixelDigits, uint referenceComponents) {
     import std.math : ceil;
-    uint needed = cast(uint)ceil(perPixelDigits / 15.0);
+    import multidouble : MULTIDOUBLE_DIGITS_PER_COMPONENT;
+    uint needed = cast(uint)ceil(perPixelDigits / cast(double)MULTIDOUBLE_DIGITS_PER_COMPONENT);
     if (needed < MULTIDOUBLE_MIN_DOUBLES) {
         needed = MULTIDOUBLE_MIN_DOUBLES;
     }
@@ -667,7 +693,8 @@ private void iterateGMPMode(ref IterResult[][] iters, const ref RenderConfig cfg
         writeln("Using Perturbation+BLA with multidouble precision (reference ",
                 numDoubles, " doubles, per-pixel ", numDoublesDelta, " doubles)");
         writeln("Reference orbit precision: ", digits, " digits");
-        auto mdCapacity = numDoubles * 15.0;
+        import multidouble : MULTIDOUBLE_DIGITS_PER_COMPONENT;
+        auto mdCapacity = numDoubles * cast(double)MULTIDOUBLE_DIGITS_PER_COMPONENT;
         perPixelDigitsEstimate = perPixelDigits;
         multiDoubleCapacityDigits = mdCapacity;
         havePerPixelEstimate = true;
@@ -683,16 +710,55 @@ private void iterateGMPMode(ref IterResult[][] iters, const ref RenderConfig cfg
                 precisionMethod == PrecisionMethod.bigfloat ? "bigfloat" : "double", " precision");
     }
     
-    writeln("Computing reference orbit at center:");
-    writeln("  X: ", desc.originXStr);
-    writeln("  Y: ", desc.originYStr);
+    int centerPx = desc.width / 2;
+    int centerPy = desc.height / 2;
+    
+    string centerXHP = originXHP;
+    string centerYHP = originYHP;
+    
+    import gmp_arb : GMPPixelConverter;
+    auto centerConverter = GMPPixelConverter(
+        desc.width, desc.height,
+        originXHP, originYHP, radiusHP
+    );
+    auto centerC = centerConverter.getCenter();
+    string centerXHPVerify = centerC.re.toString();
+    string centerYHPVerify = centerC.im.toString();
+    
+    centerXHP = centerXHPVerify;
+    centerYHP = centerYHPVerify;
+    
+    writeln("Computing reference orbit at exact center pixel (", centerPx, ", ", centerPy, "):");
+    writeln("  X: ", centerXHP.length > 80 ? centerXHP[0..80] ~ "..." : centerXHP);
+    writeln("  Y: ", centerYHP.length > 80 ? centerYHP[0..80] ~ "..." : centerYHP);
     writeln("  Iterations: ", desc.dwell);
     stdout.flush();
     
+    debug(gmpdebug) {
+        writeln("DEBUG: About to call computeReferenceOrbit with:");
+        writeln("DEBUG:   centerXHP length: ", centerXHP.length);
+        writeln("DEBUG:   centerYHP length: ", centerYHP.length);
+        writeln("DEBUG:   precisionMethod: ", 
+                precisionMethod == PrecisionMethod.double_ ? "double" :
+                precisionMethod == PrecisionMethod.bigfloat ? "bigfloat" :
+                precisionMethod == PrecisionMethod.multidouble ? "multidouble" :
+                precisionMethod == PrecisionMethod.bigint ? "bigint" :
+                precisionMethod == PrecisionMethod.gmp ? "gmp" : "auto");
+        stdout.flush();
+    }
+    
+    debug(gmpdebug) {
+        writeln("DEBUG: Calling computeReferenceOrbit...");
+        stdout.flush();
+    }
     auto refOrbit = computeReferenceOrbit(
-        originXHP, originYHP, desc.dwell, precisionMethod
+        centerXHP, centerYHP, desc.dwell, precisionMethod
     );
-    ReferenceOrbit bigFloatFallbackOrbit;
+    debug(gmpdebug) {
+        writeln("DEBUG: computeReferenceOrbit returned successfully");
+        stdout.flush();
+    }
+    ReferenceOrbit bigFloatFallbackOrbit = ReferenceOrbit.init;
     bool haveBigFloatFallback = false;
     
     writeln("Reference orbit computed with precision method: ", 
@@ -710,7 +776,7 @@ private void iterateGMPMode(ref IterResult[][] iters, const ref RenderConfig cfg
                 format!"%.1f"(perPixelDigitsEstimate), " vs ",
                 format!"%.1f"(multiDoubleCapacityDigits), " digits). Preparing BigFloat fallback orbit...");
         bigFloatFallbackOrbit = computeReferenceOrbit(
-            originXHP, originYHP, desc.dwell, PrecisionMethod.bigint
+            centerXHP, centerYHP, desc.dwell, PrecisionMethod.bigint
         );
         haveBigFloatFallback = bigFloatFallbackOrbit.zRefBigFloat.length > 0;
         if (!haveBigFloatFallback) {
@@ -755,8 +821,8 @@ private void iterateGMPMode(ref IterResult[][] iters, const ref RenderConfig cfg
     
     import gmp_arb : GMPFloat, GMPPixelConverter, GMPComplex;
     
-    GMPComplex cRefGMP;
-    GMPPixelConverter pixelConverterGMP;
+    GMPComplex cRefGMP = GMPComplex.zero();
+    GMPPixelConverter pixelConverterGMP = GMPPixelConverter.init;
     
     switch (precisionMethod) {
         default: {
@@ -764,66 +830,72 @@ private void iterateGMPMode(ref IterResult[][] iters, const ref RenderConfig cfg
                 desc.width, desc.height,
                 originXHP, originYHP, radiusHP
             );
-            cRefGMP = GMPComplex(originXHP, originYHP);
+            cRefGMP = GMPComplex(centerXHP, centerYHP);
             break;
         }
     }
     
-    double w = cast(double)desc.width;
-    double h = cast(double)desc.height;
-    double minDim = min(w, h);
-    double di = 0, dr = 0;
-    if (desc.width != desc.height) {
-        double diff = (max(w, h) - minDim) / minDim;
-        di = desc.width > desc.height ? diff : 0;
-        dr = desc.width > desc.height ? 0 : diff;
+    double minDim = min(cast(double)desc.width, cast(double)desc.height);
+    
+    debug(gmpdebug) {
+        import std.stdio;
+        stderr.writeln("DEBUG: About to create radiusGMP from: ", radiusHP);
+        stderr.flush();
     }
+    GMPFloat radiusGMP = GMPFloat(radiusHP);
+    debug(gmpdebug) {
+        import std.stdio;
+        stderr.writeln("DEBUG: radiusGMP created successfully");
+        stderr.flush();
+    }
+    debug(gmpdebug) {
+        import std.stdio;
+        stderr.writeln("DEBUG: About to create twoGMP...");
+        stderr.flush();
+    }
+    GMPFloat twoGMP = GMPFloat(2.0);
+    debug(gmpdebug) {
+        import std.stdio;
+        stderr.writeln("DEBUG: twoGMP created successfully");
+        stderr.flush();
+    }
+    debug(gmpdebug) {
+        import std.stdio;
+        stderr.writeln("DEBUG: About to create minDimGMP...");
+        stderr.flush();
+    }
+    GMPFloat minDimGMP = GMPFloat(minDim);
+    debug(gmpdebug) {
+        import std.stdio;
+        stderr.writeln("DEBUG: minDimGMP created successfully");
+        stderr.flush();
+    }
+    debug(gmpdebug) {
+        import std.stdio;
+        stderr.writeln("DEBUG: About to compute pixelSizeGMP...");
+        stderr.flush();
+    }
+    GMPFloat pixelSizeGMP = (radiusGMP * twoGMP) / minDimGMP;
+    debug(gmpdebug) {
+        import std.stdio;
+        stderr.writeln("DEBUG: pixelSizeGMP computed successfully");
+        stderr.flush();
+    }
+    
+    import doubledouble : DoubleDouble, DDComplex;
+    DoubleDouble pixelSizeDD = DoubleDouble(pixelSizeGMP.toString());
 
-    double[] relXValues = new double[](desc.width);
-    foreach (i; 0 .. desc.width) {
-        relXValues[i] = (cast(double)i / minDim) * 2.0 - (1.0 + di);
-    }
-    double[] relYValues = new double[](desc.height);
-    foreach (j; 0 .. desc.height) {
-        relYValues[j] = (cast(double)j / minDim) * 2.0 - (1.0 + dr);
-    }
-
-    MultiDouble pixelScaleMD;
-    MultiDouble[] relXValuesMD;
-    MultiDouble[] relYValuesMD;
-    string radiusStrForMD;
+    MultiDouble pixelSizeMD;
     MultiDoubleComplex centerCoordMD;
+    bool useMultiDoubleForDeltas = false;
     if (precisionMethod == PrecisionMethod.multidouble && numDoublesForMD > 0) {
-        radiusStrForMD = radiusHP;
-        auto radiusMD = MultiDouble(numDoublesForMD, radiusStrForMD);
-        auto twoMD = MultiDouble(numDoublesForMD, 2.0);
-        pixelScaleMD = radiusMD * twoMD;
-        centerCoordMD = MultiDoubleComplex(numDoublesForMD, originXHP, originYHP);
-
-        relXValuesMD.length = desc.width;
-        foreach (i; 0 .. desc.width) {
-            relXValuesMD[i] = MultiDouble(numDoublesForMD, relXValues[i]);
-        }
-        relYValuesMD.length = desc.height;
-        foreach (j; 0 .. desc.height) {
-            relYValuesMD[j] = MultiDouble(numDoublesForMD, relYValues[j]);
-        }
-    }
-
-    BigFloat pixelScaleBF;
-    BigFloat[] relXValuesBF;
-    BigFloat[] relYValuesBF;
-    if (precisionMethod == PrecisionMethod.bigint || haveBigFloatFallback) {
-        auto radiusBF = BigFloat(radiusHP);
-        auto twoBF = BigFloat("2");
-        pixelScaleBF = radiusBF * twoBF;
-        relXValuesBF.length = desc.width;
-        foreach (i; 0 .. desc.width) {
-            relXValuesBF[i] = BigFloat(format!"%.20g"(relXValues[i]));
-        }
-        relYValuesBF.length = desc.height;
-        foreach (j; 0 .. desc.height) {
-            relYValuesBF[j] = BigFloat(format!"%.20g"(relYValues[j]));
+        int zoomExp = getZoomExponent(radiusHP);
+        int zoomDepth = zoomExp < 0 ? -zoomExp : 0;
+        if (zoomDepth <= 45) {
+            useMultiDoubleForDeltas = true;
+            auto pixelSizeStr = pixelSizeGMP.toString();
+            pixelSizeMD = MultiDouble(numDoublesForMD, pixelSizeStr);
+            centerCoordMD = MultiDoubleComplex(numDoublesForMD, originXHP, originYHP);
         }
     }
     
@@ -849,7 +921,13 @@ private void iterateGMPMode(ref IterResult[][] iters, const ref RenderConfig cfg
     const Complex!double[] zRefArray = refOrbitForBLA.zRef.dup;
     const DDComplex[] zRefArrayDD = refOrbit.zRefDoubleDouble.dup;
     const MultiDoubleComplex[] zRefArrayMD = refOrbit.zRefMultiDouble.dup;
-    const GMPComplex[] zRefArrayGMP = refOrbit.zRefGMP.dup;
+    // const GMPComplex[] zRefArrayGMP = refOrbit.zRefGMP.dup;
+    GMPComplex[] zRefArrayGMP;
+    if (refOrbit.zRefGMP.length > 0) {
+        import std.array : array;
+        zRefArrayGMP = refOrbit.zRefGMP.map!(z => GMPComplex(z)).array;
+    }
+
     const BigFloatComplex[] zRefArrayBF =
         precisionMethod == PrecisionMethod.bigint ? refOrbit.zRefBigFloat.dup :
         haveBigFloatFallback ? bigFloatFallbackOrbit.zRefBigFloat.dup :
@@ -860,102 +938,61 @@ private void iterateGMPMode(ref IterResult[][] iters, const ref RenderConfig cfg
     auto wRange = iota(0, desc.width);
     foreach (i; parallel(wRange)) {
         for (int j = 0; j < desc.height; j++) {
-            Complex!double delta0;
-            double delta0LogScale = 0.0;
-            bool useScaledDelta = false;
+            int dx = i - centerPx;
+            int dy = centerPy - j;
+            bool isCenterPixel = (dx == 0 && dy == 0);
+            
             DDComplex delta0DD;
-            GMPComplex delta0GMP;
+            Complex!double delta0;
+            GMPComplex delta0GMP = GMPComplex.zero();
+            MultiDoubleComplex delta0MD;
             BigFloatComplex delta0BF;
             
-            double relX = relXValues[i];
-            double relY = relYValues[j];
-            bool isCenterPixel = (relX == 0.0 && relY == 0.0);
-            
-            double delta0Real = relX * desc.radius * 2.0;
-            double delta0Imag = relY * desc.radius * 2.0;
-            double deltaAbsSq = delta0Real * delta0Real + delta0Imag * delta0Imag;
-            import std.process : environment;
-            bool forceScaledEnv = "MANDEL_FORCE_SCALED" in environment;
-            bool deltaTooSmallForDouble = (!isCenterPixel &&
-                precisionMethod != PrecisionMethod.bigint &&
-                (deltaAbsSq == 0.0 ||
-                deltaAbsSq < SCALED_DELTA_THRESHOLD_SQUARED ||
-                forceScaledDelta));
-            if (deltaTooSmallForDouble || forceScaledEnv) {
-                useScaledDelta = true;
-                delta0 = Complex!double(relX * 2.0, relY * 2.0);
-                auto ePos = radiusHP.countUntil!(c => c == 'e' || c == 'E')();
-                if (ePos >= 0) {
-                    delta0LogScale = to!double(radiusHP[ePos + 1 .. $]);
-                } else {
-                    delta0LogScale = std.math.log10(cast(double)desc.radius);
+            if (!isCenterPixel) {
+                DoubleDouble dxDD = DoubleDouble(cast(double)dx);
+                DoubleDouble dyDD = DoubleDouble(cast(double)dy);
+                
+                DoubleDouble deltaReDD = dxDD * pixelSizeDD;
+                DoubleDouble deltaImDD = dyDD * pixelSizeDD;
+                delta0DD = DDComplex(deltaReDD, deltaImDD);
+                
+                delta0 = Complex!double(deltaReDD.toDouble(), deltaImDD.toDouble());
+                
+                if (precisionMethod == PrecisionMethod.gmp) {
+                    auto pixelC = pixelConverterGMP.pixelToComplex(i, j);
+                    delta0GMP = pixelC - cRefGMP;
                 }
-            } else {
-                delta0 = Complex!double(delta0Real, delta0Imag);
-            }
-
-            MultiDoubleComplex delta0MD;
-            if (precisionMethod == PrecisionMethod.multidouble && numDoublesForMD > 0) {
-                auto deltaReMD = relXValuesMD[i] * pixelScaleMD;
-                auto deltaImMD = relYValuesMD[j] * pixelScaleMD;
-                delta0MD = MultiDoubleComplex(deltaReMD, deltaImMD);
-            }
-
-            if (precisionMethod == PrecisionMethod.bigint) {
-                auto deltaReBF = relXValuesBF[i] * pixelScaleBF;
-                auto deltaImBF = relYValuesBF[j] * pixelScaleBF;
-                delta0BF = BigFloatComplex(deltaReBF, deltaImBF);
+                
+                if (useMultiDoubleForDeltas) {
+                    DoubleDouble dxMD = DoubleDouble(cast(double)dx);
+                    DoubleDouble dyMD = DoubleDouble(cast(double)dy);
+                    auto deltaReMD = MultiDouble(numDoublesForMD, dxMD.toDouble()) * pixelSizeMD;
+                    auto deltaImMD = MultiDouble(numDoublesForMD, dyMD.toDouble()) * pixelSizeMD;
+                    delta0MD = MultiDoubleComplex(deltaReMD, deltaImMD);
+                }
+                
+                if (precisionMethod == PrecisionMethod.bigint) {
+                    import bigfloat : BigFloat, BigFloatComplex;
+                    BigFloat dxBF = BigFloat(cast(double)dx);
+                    BigFloat dyBF = BigFloat(cast(double)dy);
+                    BigFloat pixelSizeBF = BigFloat(pixelSizeGMP.toString());
+                    auto deltaReBF = dxBF * pixelSizeBF;
+                    auto deltaImBF = dyBF * pixelSizeBF;
+                    delta0BF = BigFloatComplex(deltaReBF, deltaImBF);
+                }
             }
 
             bool usedBigFloatFallback = false;
             PerturbResult fallbackPerturb;
-            if (precisionMethod == PrecisionMethod.multidouble &&
-                haveBigFloatFallback &&
-                zRefArrayBF.length > 0 &&
-                !isCenterPixel &&
-                numDoublesForMD > 0 &&
-                delta0MD.re.isZero() && delta0MD.im.isZero()) {
-                auto deltaReBF = relXValuesBF[i] * pixelScaleBF;
-                auto deltaImBF = relYValuesBF[j] * pixelScaleBF;
-                auto deltaFallback = BigFloatComplex(deltaReBF, deltaImBF);
-                import perturbation_bla_hp : perturbIterateBLABigFloat;
-                fallbackPerturb = perturbIterateBLABigFloat(
-                    zRefArrayBF, escapeRadius2, blaEntriesArray,
-                    deltaFallback, desc.dwell
-                );
-                usedBigFloatFallback = true;
-            }
-
-            if (!isCenterPixel && !usedBigFloatFallback) {
-                if (precisionMethod == PrecisionMethod.bigfloat) {
-                    delta0DD = DDComplex(DoubleDouble(delta0.re), DoubleDouble(delta0.im));
-                } else if (precisionMethod == PrecisionMethod.gmp) {
-                    auto pixelC = pixelConverterGMP.pixelToComplex(i, j);
-                    delta0GMP = pixelC - cRefGMP;
-                }
-
+            
+            if (!isCenterPixel) {
                 auto runDoublePerturb = () {
-                    PerturbResult res;
-                    if (useScaledDelta && precisionMethod == PrecisionMethod.multidouble && numDoublesForMD > 0) {
-                        import perturbation_bla_hp : perturbIterateBLAMultiDoubleDelta;
-                        uint numDeltaDoubles = numDoublesForMD < 2 ? 2u : (numDoublesForMD < 4 ? numDoublesForMD : 4u);
-                        res = perturbIterateBLAMultiDoubleDelta(
-                            zRefArray, escapeRadius2, blaEntriesArray,
-                            delta0MD, desc.dwell, numDeltaDoubles
-                        );
-                    } else if (useScaledDelta) {
-                        res = perturbIterateBLAScaledArrays(
-                            zRefArray, escapeRadius2, blaEntriesArray,
-                            delta0, delta0LogScale,
-                            Complex!double(delta0Real, delta0Imag),
-                            desc.dwell
-                        );
-                    } else {
-                        res = perturbIterateBLAArrays(
-                            zRefArray, escapeRadius2, blaEntriesArray, delta0, desc.dwell
-                        );
-                    }
-                    return res;
+                    import perturbation_bla_hp : perturbIterateBLADDComplex;
+                    return perturbIterateBLADDComplex(
+                        zRefArrayDD.length > 0 ? zRefArrayDD : 
+                            zRefArray.map!(z => DDComplex(DoubleDouble(z.re), DoubleDouble(z.im))).array,
+                        escapeRadius2, blaEntriesArray, delta0DD, desc.dwell
+                    );
                 };
 
                 bool handled = false;
@@ -963,7 +1000,7 @@ private void iterateGMPMode(ref IterResult[][] iters, const ref RenderConfig cfg
 
                 switch (precisionMethod) {
                     case PrecisionMethod.multidouble: {
-                         if (zRefArrayMD.length > 0 && numDoublesForMD > 0) {
+                        if (useMultiDoubleForDeltas && zRefArrayMD.length > 0 && numDoublesForMD > 0) {
                             import perturbation_bla_hp : perturbIterateBLAMultiDouble;
                             perturbResult = perturbIterateBLAMultiDouble(
                                 zRefArrayMD, escapeRadius2, blaEntriesArray,
@@ -976,36 +1013,38 @@ private void iterateGMPMode(ref IterResult[][] iters, const ref RenderConfig cfg
                         break;
                     }
                     case PrecisionMethod.bigfloat: {
-                        if (zRefArrayDD.length > 0) {
-                            import perturbation_bla_hp : perturbIterateBLADDComplex;
-                            perturbResult = perturbIterateBLADDComplex(
-                                zRefArrayDD, escapeRadius2, blaEntriesArray,
-                                delta0DD, desc.dwell
-                            );
-                            handled = true;
-                        }
+                        perturbResult = runDoublePerturb();
+                        handled = true;
                         break;
                     }
                     case PrecisionMethod.gmp: {
                         if (zRefArrayGMP.length > 0) {
-                            import perturbation_bla_hp : perturbIterateBLAGMP;
-                            perturbResult = perturbIterateBLAGMP(
-                                zRefArrayGMP, escapeRadius2, blaEntriesArray,
-                                delta0GMP, desc.dwell
+                            auto zRefDD = zRefArrayGMP.map!(z => 
+                                DDComplex(DoubleDouble(z.re.toString()), DoubleDouble(z.im.toString()))
+                            ).array;
+                            import perturbation_bla_hp : perturbIterateBLADDComplex;
+                            perturbResult = perturbIterateBLADDComplex(
+                                zRefDD, escapeRadius2, blaEntriesArray, delta0DD, desc.dwell
                             );
-                            handled = true;
+                        } else {
+                            perturbResult = runDoublePerturb();
                         }
+                        handled = true;
                         break;
                     }
                     case PrecisionMethod.bigint: {
                         if (zRefArrayBF.length > 0) {
-                            import perturbation_bla_hp : perturbIterateBLABigFloat;
-                            perturbResult = perturbIterateBLABigFloat(
-                                zRefArrayBF, escapeRadius2, blaEntriesArray,
-                                delta0BF, desc.dwell
+                            auto zRefDD = zRefArrayBF.map!(z => 
+                                DDComplex(DoubleDouble(bigFloatToString(z.re, 50)), DoubleDouble(bigFloatToString(z.im, 50)))
+                            ).array;
+                            import perturbation_bla_hp : perturbIterateBLADDComplex;
+                            perturbResult = perturbIterateBLADDComplex(
+                                zRefDD, escapeRadius2, blaEntriesArray, delta0DD, desc.dwell
                             );
-                            handled = true;
+                        } else {
+                            perturbResult = runDoublePerturb();
                         }
+                        handled = true;
                         break;
                     }
                     default: {
@@ -1016,6 +1055,17 @@ private void iterateGMPMode(ref IterResult[][] iters, const ref RenderConfig cfg
                 }
 
                 if (handled) {
+                    debug(gmpdebug) {
+                        import std.stdio;
+                        static int debugPixelCount = 0;
+                        if (debugPixelCount < 20 && i < 10 && j < 10) {
+                            stderr.writeln("[PIXEL DEBUG] Pixel [", i, ",", j, "]: iterations=", 
+                                          perturbResult.iterations, " smoothed=", perturbResult.smoothed,
+                                          " maxIter=", desc.dwell);
+                            stderr.flush();
+                            debugPixelCount++;
+                        }
+                    }
                     iters[i][j] = IterResult(
                         perturbResult.iterations,
                         perturbResult.smoothed
@@ -1062,7 +1112,6 @@ private void iterateGMPMode(ref IterResult[][] iters, const ref RenderConfig cfg
         }
     }
     writeln();
-
     int minIterFirst = int.max;
     int maxIterFirst = int.min;
     long maxIterCountFirst = 0;
@@ -1116,20 +1165,17 @@ private void iterateGMPMode(ref IterResult[][] iters, const ref RenderConfig cfg
                 zRefArrayMD.length > 0) {
                 import perturbation_bla_hp : perturbIterateBLAMultiDouble;
                 import perturbation_bla_hp : iterateDirectMultiDouble;
-                auto radiusHigh = MultiDouble(numDoublesForMD, radiusStrForMD.length
-                    ? radiusStrForMD : format!"%.20g"(desc.radius));
-                auto twoHigh = MultiDouble(numDoublesForMD, 2.0);
-                auto pixelScaleHigh = radiusHigh * twoHigh;
-
                 int recomputed = 0;
                 foreach (i; 0 .. desc.width) {
                     for (int j = 0; j < desc.height; j++) {
                         if (!uncertainMask[i][j]) continue;
-                        auto relXMDHigh = MultiDouble(numDoublesForMD, relXValues[i]);
-                        auto relYMDHigh = MultiDouble(numDoublesForMD, relYValues[j]);
+                        int dx = i - centerPx;
+                        int dy = centerPy - j;
+                        auto dxMD = MultiDouble(numDoublesForMD, cast(double)dx);
+                        auto dyMD = MultiDouble(numDoublesForMD, cast(double)dy);
                         auto delta0MDHigh = MultiDoubleComplex(
-                            relXMDHigh * pixelScaleHigh,
-                            relYMDHigh * pixelScaleHigh
+                            dxMD * pixelSizeMD,
+                            dyMD * pixelSizeMD
                         );
                         PerturbResult perturbResult;
                         if (forceDirectSecondPass) {
@@ -1162,8 +1208,14 @@ private void iterateGMPMode(ref IterResult[][] iters, const ref RenderConfig cfg
                 foreach (i; 0 .. desc.width) {
                     for (int j = 0; j < desc.height; j++) {
                         if (!uncertainMask[i][j]) continue;
-                        auto deltaReBF = relXValuesBF[i] * pixelScaleBF;
-                        auto deltaImBF = relYValuesBF[j] * pixelScaleBF;
+                        int dx = i - centerPx;
+                        int dy = centerPy - j;
+                        import bigfloat : BigFloat, BigFloatComplex;
+                        BigFloat dxBF = BigFloat(cast(double)dx);
+                        BigFloat dyBF = BigFloat(cast(double)dy);
+                        BigFloat pixelSizeBF = BigFloat(pixelSizeGMP.toString());
+                        auto deltaReBF = dxBF * pixelSizeBF;
+                        auto deltaImBF = dyBF * pixelSizeBF;
                         auto deltaLocal = BigFloatComplex(deltaReBF, deltaImBF);
                         auto perturbResult = perturbIterateBLABigFloat(
                             zRefArrayBF, escapeRadius2, blaEntriesArray,
@@ -1274,11 +1326,13 @@ private void iterateGMPMode(ref IterResult[][] iters, const ref RenderConfig cfg
                     ", smooth diff=", format!"%.6f"(diffSmooth));
             if (precisionMethod == PrecisionMethod.multidouble &&
                 haveCRefMD &&
-                relXValuesMD.length == desc.width &&
-                relYValuesMD.length == desc.height &&
-                px < relXValuesMD.length && py < relYValuesMD.length) {
-                auto deltaReMDComp = relXValuesMD[px] * pixelScaleMD;
-                auto deltaImMDComp = relYValuesMD[py] * pixelScaleMD;
+                useMultiDoubleForDeltas) {
+                int dx = px - centerPx;
+                int dy = centerPy - py;
+                auto dxMD = MultiDouble(numDoublesForMD, cast(double)dx);
+                auto dyMD = MultiDouble(numDoublesForMD, cast(double)dy);
+                auto deltaReMDComp = dxMD * pixelSizeMD;
+                auto deltaImMDComp = dyMD * pixelSizeMD;
                 auto deltaReMD = deltaReMDComp.toDouble();
                 auto deltaImMD = deltaImMDComp.toDouble();
                 auto pixelGMP = verifyConverter.pixelToComplex(px, py);
@@ -1740,8 +1794,8 @@ void generateChunksSequence(ref RenderParams[] queue, JSONValue source) {
     const int h = cast(int)(s.height / to!double(chunks));
 
     const double diff = cast(double)(min(w, h)) / max(w, h);
-  const double radiusX = s.radius * (w > h ? 1 : diff) / to!double(chunks);
-  const double radiusY = s.radius * (w < h ? 1 : diff) / to!double(chunks);
+    const double radiusX = s.radius * (w > h ? 1 : diff) / to!double(chunks);
+    const double radiusY = s.radius * (w < h ? 1 : diff) / to!double(chunks);
 
     const double x1 = s.originX - (s.radius * (w > h ? 1 : diff) / to!double(chunks)) * (chunks / 2 + 2);
     const double y1 = s.originY + (s.radius * (w < h ? 1 : diff) / to!double(chunks)) * (chunks / 2 + 2);
