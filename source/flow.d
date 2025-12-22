@@ -884,6 +884,8 @@ private void iterateGMPMode(ref IterResult[][] iters, const ref RenderConfig cfg
     
     import doubledouble : DoubleDouble, DDComplex;
     DoubleDouble pixelSizeDD = DoubleDouble(pixelSizeGMP.toString());
+    assert(pixelSizeDD.toDouble() != 0.0,
+        "pixelSizeDD parsed as 0; pixelSizeGMP=" ~ pixelSizeGMP.toString());
 
     MultiDouble pixelSizeMD;
     MultiDoubleComplex centerCoordMD;
@@ -1018,13 +1020,10 @@ private void iterateGMPMode(ref IterResult[][] iters, const ref RenderConfig cfg
                         break;
                     }
                     case PrecisionMethod.gmp: {
-                        if (zRefArrayGMP.length > 0) {
-                            auto zRefDD = zRefArrayGMP.map!(z => 
-                                DDComplex(DoubleDouble(z.re.toString()), DoubleDouble(z.im.toString()))
-                            ).array;
+                        if (zRefArrayDD.length > 0) {
                             import perturbation_bla_hp : perturbIterateBLADDComplex;
                             perturbResult = perturbIterateBLADDComplex(
-                                zRefDD, escapeRadius2, blaEntriesArray, delta0DD, desc.dwell
+                                zRefArrayDD, escapeRadius2, blaEntriesArray, delta0DD, desc.dwell
                             );
                         } else {
                             perturbResult = runDoublePerturb();

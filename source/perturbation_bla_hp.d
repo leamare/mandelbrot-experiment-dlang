@@ -698,39 +698,15 @@ PerturbResult perturbIterateBLAGMP(
     bool usingLastRef = false;
     int escapeIter = -1;  // Track escape iteration per pixel
     
-    // Ensure escapeRadius2 is valid - if it's NaN or wrong value, use the correct value
-    // Standard Mandelbrot escape radius is 2.0, so escapeRadius2 should be 4.0
-    // Some code paths may pass (1 << 16) = 65536, which is wrong - override it
+    // Use the escape radius passed in from the reference orbit / caller.
+    // This keeps behaviour consistent with the original implementation, which
+    // tuned BLA tables and perturbation thresholds for this value.
     double validEscapeRadius2 = escapeRadius2;
-    if (!(validEscapeRadius2 == validEscapeRadius2) || validEscapeRadius2 <= 0 || validEscapeRadius2 > 100.0) {
-        validEscapeRadius2 = 4.0;  // 2.0^2 = standard Mandelbrot escape radius squared
+    if (!(validEscapeRadius2 == validEscapeRadius2) || validEscapeRadius2 <= 0) {
+        // Fallback to a sane default if the caller passed NaN or non-positive.
+        validEscapeRadius2 = escapeRadius2 > 0 ? escapeRadius2 : cast(double)(1 << 16);
     }
-    // Force to 4.0 always for now to debug
-    validEscapeRadius2 = 4.0;
     GMPFloat escapeRadius2GMP = GMPFloat(validEscapeRadius2);
-    
-    // Debug: print escape radius
-    import std.stdio;
-    static bool escapeRadiusPrinted = false;
-    if (!escapeRadiusPrinted) {
-        stderr.writeln("[DEBUG] escapeRadius2 param=", escapeRadius2, " validEscapeRadius2=", validEscapeRadius2);
-        stderr.flush();
-        escapeRadiusPrinted = true;
-    }
-    
-    // Debug: check initial delta0 magnitude and first few iterations
-    import std.stdio;
-    static int debugPixelCount = 0;
-    if (debugPixelCount < 3) {
-        auto delta0Mag2 = delta0.magnitudeSquared();
-        double delta0Mag2Double = delta0Mag2.toDouble();
-        double delta0Mag = sqrt(delta0Mag2Double);
-        stderr.writeln("[DEBUG pixel ", debugPixelCount, "] Initial delta0 magnitude: ", delta0Mag, " (squared: ", delta0Mag2Double, ")");
-        stderr.writeln("[DEBUG] Escape radius: ", sqrt(validEscapeRadius2), " (squared: ", validEscapeRadius2, ")");
-        stderr.writeln("[DEBUG] delta0 would escape at iter 0: ", delta0Mag2Double > validEscapeRadius2);
-        stderr.flush();
-        debugPixelCount++;
-    }
     
     while (iter < maxIterations) {
         if (refIter >= cast(int)maxRefIter) {

@@ -47,8 +47,10 @@ struct ReferenceOrbit {
     bool escaped;
     
     /// Escape radius squared
+    /// NOTE: The BLA tables and perturbation logic in this codebase were originally
+    /// tuned assuming a much larger escape radius (1 << 16). Restoring that here
+    /// keeps behaviour consistent with the known-good implementation.
     double escapeRadius2 = (1 << 16);
-    // double escapeRadius2 = 4.0;  // 2.0^2 = escape radius squared (standard Mandelbrot escape radius is 2.0)
     
     /// Method used for computation
     PrecisionMethod methodUsed = PrecisionMethod.double_;

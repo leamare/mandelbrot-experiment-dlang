@@ -38,29 +38,30 @@ struct GMPFloat {
     
     this(string s) {
         s = s.strip();
+        value = Mpfr(0.0, currentPrecision);
+        import deimos.mpfr : mpfr_set_str;
+        import std.string : toStringz;
         if (s.length == 0 || s == "0") {
-            value = Mpfr(0.0, currentPrecision);
             isValid = true;
             return;
         }
-        
-        value = Mpfr(0.0, currentPrecision);
-        import deimos.mpfr : mpfr_set_str;
-        mpfr_set_str(value.mpfr, s.ptr, 10, mpfr_rnd_t.MPFR_RNDN);
+        auto cstr = toStringz(s);
+        auto rc = mpfr_set_str(value.mpfr, cstr, 10, mpfr_rnd_t.MPFR_RNDN);
+        assert(rc == 0, "mpfr_set_str failed for: "~s);
         isValid = true;
     }
     
     this(ref const GMPFloat other) {
-        if (!other.isValid) {
-            value = Mpfr(0.0, currentPrecision);
-            isValid = true;
-            return;
-        }
         value = Mpfr(0.0, currentPrecision);
-        import deimos.mpfr : mpfr_set_str;
-        string str = other.value.toString();
-        mpfr_set_str(value.mpfr, str.ptr, 10, mpfr_rnd_t.MPFR_RNDN);
-        isValid = true;
+        import deimos.mpfr : mpfr_set;
+        if (other.isValid) {
+            mpfr_set(value.mpfr, other.value.mpfr, mpfr_rnd_t.MPFR_RNDN);
+            isValid = true;
+        } else {
+            import deimos.mpfr : mpfr_set_d;
+            mpfr_set_d(value.mpfr, 0.0, mpfr_rnd_t.MPFR_RNDN);
+            isValid = true;
+        }
     }
     
     ~this() {
@@ -89,27 +90,45 @@ struct GMPFloat {
     }
     
     GMPFloat opUnary(string op)() const if (op == "-") {
-        return GMPFloat((-value).toString());
+        GMPFloat result = GMPFloat(0.0);
+        import deimos.mpfr : mpfr_neg;
+        mpfr_neg(result.value.mpfr, this.value.mpfr, mpfr_rnd_t.MPFR_RNDN);
+        return result;
     }
     
     GMPFloat opBinary(string op)(const GMPFloat rhs) const if (op == "+") {
-        return GMPFloat((value + rhs.value).toString());
+        GMPFloat result = GMPFloat(0.0);
+        import deimos.mpfr : mpfr_add;
+        mpfr_add(result.value.mpfr, this.value.mpfr, rhs.value.mpfr, mpfr_rnd_t.MPFR_RNDN);
+        return result;
     }
     
     GMPFloat opBinary(string op)(const GMPFloat rhs) const if (op == "-") {
-        return GMPFloat((value - rhs.value).toString());
+        GMPFloat result = GMPFloat(0.0);
+        import deimos.mpfr : mpfr_sub;
+        mpfr_sub(result.value.mpfr, this.value.mpfr, rhs.value.mpfr, mpfr_rnd_t.MPFR_RNDN);
+        return result;
     }
     
     GMPFloat opBinary(string op)(const GMPFloat rhs) const if (op == "*") {
-        return GMPFloat((value * rhs.value).toString());
+        GMPFloat result = GMPFloat(0.0);
+        import deimos.mpfr : mpfr_mul;
+        mpfr_mul(result.value.mpfr, this.value.mpfr, rhs.value.mpfr, mpfr_rnd_t.MPFR_RNDN);
+        return result;
     }
     
     GMPFloat opBinary(string op)(const GMPFloat rhs) const if (op == "/") {
-        return GMPFloat((value / rhs.value).toString());
+        GMPFloat result = GMPFloat(0.0);
+        import deimos.mpfr : mpfr_div;
+        mpfr_div(result.value.mpfr, this.value.mpfr, rhs.value.mpfr, mpfr_rnd_t.MPFR_RNDN);
+        return result;
     }
     
     GMPFloat opBinary(string op)(double rhs) const if (op == "*") {
-        return GMPFloat((value * rhs).toString());
+        GMPFloat result = GMPFloat(0.0);
+        import deimos.mpfr : mpfr_mul_d;
+        mpfr_mul_d(result.value.mpfr, this.value.mpfr, rhs, mpfr_rnd_t.MPFR_RNDN);
+        return result;
     }
     
     int opCmp(const GMPFloat rhs) const {
@@ -203,8 +222,8 @@ struct GMPComplex {
     }
     
     this(ref const GMPComplex other) {
-        re = GMPFloat(other.re.toString());
-        im = GMPFloat(other.im.toString());
+        re = GMPFloat(other.re);
+        im = GMPFloat(other.im);
     }
     
     static GMPComplex zero() {
