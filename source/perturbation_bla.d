@@ -1164,23 +1164,19 @@ private void addScaledTerm(ref Complex!double accum,
     renormalizeScaledDelta(accum, accumLogScale, accumScale);
 }
 
-/// Scaled delta iteration with BLA support for extreme zooms
 /// Handles deltas that are too small to represent in double precision
 PerturbResult perturbIterateBLAScaledArrays(
     const Complex!double[] zRefArray,
     const double escapeRadius2,
     const BLAEntry[] blaEntriesArray,
-    Complex!double delta0Normalized,
-    double delta0LogScale,
-    Complex!double delta0Actual,
-    uint maxIterations
+    Complex!double delta0Normalized,   // Normalized delta (in range [-2, 2])
+    double delta0LogScale,            // log10 of the actual scale factor
+    uint maxIterations,
+    int refEscapeIteration = -1       // 1-based escape iter for reference; -1 if never escaped
 ) {
+    // Copied from the known-good implementation in mandelbrot-alt.
     PerturbResult result;
-    bool forcedApproximation = false;
-    enum int MAX_SCALED_BLA_SKIP = 32;
-    import std.process : environment;
-    import std.string : format;
-    bool tracePixel = "MANDEL_TRACE_PIXEL" in environment;
+    
     const size_t zRefLength = zRefArray.length;
     const size_t blaEntriesLength = blaEntriesArray.length;
     
@@ -1188,30 +1184,26 @@ PerturbResult perturbIterateBLAScaledArrays(
         result.iterations = cast(int)maxIterations;
         result.smoothed = cast(double)maxIterations;
         result.glitched = true;
-        result.uncertain = true;  // Mark as uncertain if we don't have enough reference data
+        result.uncertain = true;
         return result;
     }
     
     const double rebaseThreshold = 1e-10;
-    const double logRebaseThreshold = std.math.log10(rebaseThreshold);
+    
     auto delta = delta0Normalized;
-    const Complex!double delta0Norm = delta0Normalized;
-    const Complex!double delta0Exact = delta0Actual;
+    auto delta0 = delta0Normalized;
     double currentLogScale = delta0LogScale;
-    double currentScale = pow10Clamped(currentLogScale);
-    renormalizeScaledDelta(delta, currentLogScale, currentScale);
-    int lastRebaseIter = -1000000;
     
     int iter = 0;
     int refIter = 0;
     size_t maxRefIter = zRefLength;
     bool usingLastRef = false;
     
+    int refEscapeIndex = refEscapeIteration >= 0 ? refEscapeIteration - 1 : -1;
+    
     while (iter < maxIterations) {
         if (refIter >= cast(int)maxRefIter) {
-            if (maxRefIter == 0) {
-                break;
-            }
+            if (maxRefIter == 0) break;
             refIter = cast(int)maxRefIter - 1;
             usingLastRef = true;
         }
@@ -1220,164 +1212,112 @@ PerturbResult perturbIterateBLAScaledArrays(
             break;
         }
         Complex!double zRef = zRefArray[refIter];
+        
         double refMag2 = zRef.re * zRef.re + zRef.im * zRef.im;
-
-        renormalizeScaledDelta(delta, currentLogScale, currentScale);
-        bool haveScale = currentScale != 0.0 && currentScale == currentScale && currentScale != double.max;
-        bool scaleUsable = haveScale && currentScale > 0.0;
-        Complex!double deltaActual = scaleUsable
-            ? Complex!double(delta.re * currentScale, delta.im * currentScale)
-            : Complex!double(0.0, 0.0);
-        double deltaMag2Actual = scaleUsable
-            ? deltaActual.re * deltaActual.re + deltaActual.im * deltaActual.im
-            : 0.0;
-        double logDeltaMag2Actual = scaleUsable
-            ? std.math.log10(max(deltaMag2Actual, 1e-300))
-            : -double.infinity;
-        if (!scaleUsable) forcedApproximation = true;
         
-        auto z = scaleUsable ? (zRef + deltaActual) : zRef;
-        double zMag2 = scaleUsable ? (z.re * z.re + z.im * z.im) : refMag2;
+        double deltaMag = sqrt(delta.re * delta.re + delta.im * delta.im);
+        double logActualMag = std.math.log10(max(deltaMag, 1e-300)) + currentLogScale;
         
-        if (tracePixel && iter % 128 == 0) {
-            import std.stdio : writeln;
-            writeln("[scaled] iter=", iter,
-                    " logScale=", currentLogScale,
-                    " |deltaActual|=", sqrt(deltaMag2Actual));
+        double zMag2;
+        if (logActualMag > -10 && currentLogScale < 0) {
+            double actualScale = (currentLogScale > -300) ? std.math.pow(10.0, currentLogScale) : 0;
+            if (actualScale == 0 || actualScale < 1e-300) {
+                double refMag = sqrt(refMag2);
+                double deltaContrib = std.math.pow(10.0, logActualMag);
+                double worstCaseMag = refMag + deltaContrib;
+                zMag2 = worstCaseMag * worstCaseMag;
+            } else {
+                auto z = zRef + Complex!double(delta.re * actualScale, delta.im * actualScale);
+                zMag2 = z.re * z.re + z.im * z.im;
+            }
+        } else {
+            if (currentLogScale >= 0) {
+                auto z = zRef + delta;
+                zMag2 = z.re * z.re + z.im * z.im;
+            } else {
+                double actualScale = (currentLogScale > -300) ? std.math.pow(10.0, currentLogScale) : 0;
+                if (actualScale > 0 && actualScale >= 1e-300) {
+                    auto z = zRef + Complex!double(delta.re * actualScale, delta.im * actualScale);
+                    zMag2 = z.re * z.re + z.im * z.im;
+                } else {
+                    zMag2 = refMag2;
+                    if (refMag2 > escapeRadius2 * 10.0) {
+                        double logZn = std.math.log(refMag2) * 0.5;
+                        double nu = std.math.log(logZn / std.math.log(2.0)) / std.math.log(2.0);
+                        result.iterations = iter;
+                        result.smoothed = 1 + cast(double)iter - nu;
+                        result.glitched = false;
+                        result.uncertain = false;
+                        return result;
+                    }
+                }
+            }
         }
-
+        
         if (zMag2 > escapeRadius2) {
             double logZn = std.math.log(zMag2) * 0.5;
             double nu = std.math.log(logZn / std.math.log(2.0)) / std.math.log(2.0);
             result.iterations = iter;
             result.smoothed = 1 + cast(double)iter - nu;
             result.glitched = false;
-            result.uncertain = false;  // Escaped pixels are certain
+            result.uncertain = false;
             return result;
         }
         
+        // Rebase when delta dominates or becomes unusable
         bool shouldRebase = false;
-        if (!scaleUsable || deltaMag2Actual == 0 || deltaMag2Actual != deltaMag2Actual) {
+        if (deltaMag == 0 || deltaMag != deltaMag) {
             shouldRebase = true;
-        } else if (zMag2 < deltaMag2Actual * rebaseThreshold) {
+        } else if (zMag2 < deltaMag * deltaMag * rebaseThreshold) {
             shouldRebase = true;
-        } else {
-            double growthOrders = (logDeltaMag2Actual * 0.5) - delta0LogScale;
-            if (growthOrders > 10.0 && iter - lastRebaseIter > 4) { // ~1e10 relative growth
-                shouldRebase = true;
-            }
         }
+        
         if (shouldRebase) {
-            if (scaleUsable && currentScale != 0.0) {
-                delta = Complex!double(deltaActual.re / currentScale, deltaActual.im / currentScale);
-            } else {
-                delta = Complex!double(0.0, 0.0);
-                currentLogScale = delta0LogScale;
-                currentScale = pow10Clamped(currentLogScale);
-            }
-            renormalizeScaledDelta(delta, currentLogScale, currentScale);
+            delta = Complex!double(0.0, 0.0);
+            currentLogScale = delta0LogScale;
             refIter = 0;
             usingLastRef = false;
-            lastRebaseIter = iter;
             continue;
         }
-        // If perturbation is blowing up, rebase instead of bailing out early
-        if (deltaMag2Actual > escapeRadius2 * 1e4) {
-            if (iter - lastRebaseIter > 2) {
-                lastRebaseIter = iter;
-                delta = Complex!double(deltaActual.re / currentScale, deltaActual.im / currentScale);
-                renormalizeScaledDelta(delta, currentLogScale, currentScale);
-                refIter = 0;
-                usingLastRef = false;
-                continue;
-            }
-        }
         
-        double deltaMagActual = sqrt(deltaMag2Actual);
-        
-        // Disable BLA when we're in deep scaled territory; it tends to skip over
-        // the region where we need rebasing the most.
-        bool usedBLA = false;
-        bool allowBLA = scaleUsable && currentLogScale > -12.0;
-        if (allowBLA &&
-            !usingLastRef && refIter + 1 < cast(int)maxRefIter &&
-            blaEntriesLength > 0 && deltaMagActual > 0) {
-            int blaIdx = BLATable.findBestInEntries(
-                blaEntriesArray, refIter, deltaMagActual
-            );
-            
+        // Try BLA
+        if (!usingLastRef && refIter + 1 < cast(int)maxRefIter && blaEntriesLength > 0) {
+            int blaIdx = BLATable.findBestInEntries(blaEntriesArray, refIter, deltaMag);
             if (blaIdx >= 0 && blaIdx < cast(int)blaEntriesLength) {
                 const BLAEntry entry = blaEntriesArray[blaIdx];
-
-                if (entry.skipCount <= MAX_SCALED_BLA_SKIP) {
-                    double radius = entry.radius;
-                    if (radius > 0 && deltaMagActual < radius) {
-                        auto nextDeltaActual = entry.A * deltaActual + entry.B * delta0Exact;
-                        double nextMagActual = hypot(nextDeltaActual.re, nextDeltaActual.im);
-                        if (nextMagActual == nextMagActual &&
-                            nextMagActual != double.infinity &&
-                            nextMagActual < radius * 4) {
-                            delta = Complex!double(
-                                nextDeltaActual.re / currentScale,
-                                nextDeltaActual.im / currentScale
-                            );
-                            renormalizeScaledDelta(delta, currentLogScale, currentScale);
-                            iter += entry.skipCount;
-                            refIter += entry.skipCount;
-                            if (refIter >= cast(int)maxRefIter) {
-                                refIter = cast(int)maxRefIter - 1;
-                                usingLastRef = true;
-                            }
-                            usedBLA = true;
-                            continue;
-                        }
-
-                    }
-                }
-            }
-        }
-        
-        if (!usedBLA) {
-            if (refIter < 0 || refIter >= cast(int)maxRefIter) {
-                break;
-            }
-            Complex!double currentZRef = zRefArray[refIter];
-            auto twoZref = currentZRef * 2.0;
-            
-            // Use scaled accumulation to avoid underflow of the quadratic term:
-            // δ_{n+1} = 2 Z_ref δ + δ^2 + δ0, but δ and δ0 may be extremely small.
-            // Represent all terms as mantissa + logScale and add them safely.
-            Complex!double accum = Complex!double(
-                (twoZref.re * deltaActual.re - twoZref.im * deltaActual.im) / currentScale,
-                (twoZref.re * deltaActual.im + twoZref.im * deltaActual.re) / currentScale
-            );
-            double accumLogScale = currentLogScale;
-            double accumScale = currentScale;
-
-            // Quadratic term uses normalized delta with doubled scale.
-            auto deltaSqNorm = Complex!double(
-                delta.re * delta.re - delta.im * delta.im,
-                2.0 * delta.re * delta.im
-            );
-            addScaledTerm(accum, accumLogScale, accumScale, deltaSqNorm, currentLogScale * 2.0);
-
-            // Add delta0 in the same scaled units as accum
-            auto delta0Scaled = Complex!double(delta0Exact.re / currentScale, delta0Exact.im / currentScale);
-            addScaledTerm(accum, accumLogScale, accumScale, delta0Scaled, currentLogScale);
-
-            delta = accum;
-            currentLogScale = accumLogScale;
-            currentScale = pow10Clamped(currentLogScale);
-            renormalizeScaledDelta(delta, currentLogScale, currentScale);
-
-
-            iter++;
-            if (!usingLastRef) {
-                refIter++;
+                delta = entry.A * delta + entry.B * delta0;
+                iter += entry.skipCount;
+                refIter += entry.skipCount;
                 if (refIter >= cast(int)maxRefIter) {
                     refIter = cast(int)maxRefIter - 1;
                     usingLastRef = true;
                 }
+                continue;
+            }
+        }
+        
+        // Regular scaled perturbation step
+        Complex!double currentZRef = zRefArray[refIter];
+        auto twoZref = currentZRef * 2.0;
+        double logQuadContrib = 2.0 * std.math.log10(max(deltaMag, 1e-300)) + currentLogScale;
+        
+        if (logQuadContrib > -300) {
+            double scaleFactor = std.math.pow(10.0, currentLogScale);
+            auto deltaSq = Complex!double(
+                delta.re * delta.re - delta.im * delta.im,
+                2.0 * delta.re * delta.im
+            ) * scaleFactor;
+            delta = twoZref * delta + deltaSq + delta0;
+        } else {
+            delta = twoZref * delta + delta0;
+        }
+        
+        iter++;
+        if (!usingLastRef) {
+            refIter++;
+            if (refIter >= cast(int)maxRefIter) {
+                refIter = cast(int)maxRefIter - 1;
+                usingLastRef = true;
             }
         }
     }

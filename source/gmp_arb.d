@@ -316,10 +316,12 @@ auto iterateGMP(string cRealStr, string cImagStr, uint maxIterations, double esc
  * pixel converter
  */
 struct GMPPixelConverter {
-    GMPFloat centerX;
-    GMPFloat centerY;
+    GMPFloat originX;
+    GMPFloat originY;
+    GMPFloat radius;
     GMPFloat pixelSize;
-    int centerPx, centerPy;
+    double minDim;
+    double di, dr;
     int width, height;
     
     @disable this();
@@ -327,37 +329,50 @@ struct GMPPixelConverter {
     this(int w, int h, string centerXStr, string centerYStr, string radiusStr) {
         width = w;
         height = h;
-        centerPx = w / 2;
-        centerPy = h / 2;
         
-        centerX = GMPFloat(centerXStr);
-        centerY = GMPFloat(centerYStr);
+        originX = GMPFloat(centerXStr);
+        originY = GMPFloat(centerYStr);
+        radius  = GMPFloat(radiusStr);
         
-        GMPFloat radius = GMPFloat(radiusStr);
-        double minDim = min(cast(double)w, cast(double)h);
+        double wd = cast(double)w;
+        double hd = cast(double)h;
+        minDim = min(wd, hd);
+        
+        di = 0;
+        dr = 0;
+        if (w != h) {
+            double diff = (max(wd, hd) - minDim) / minDim;
+            di = w > h ? diff : 0;
+            dr = w > h ? 0 : diff;
+        }
+
         GMPFloat two = GMPFloat(2.0);
-        GMPFloat minDimGMP = GMPFloat(minDim);
-        pixelSize = (radius * two) / minDimGMP;
+        pixelSize = (radius * two) / GMPFloat(minDim);
     }
     
     GMPComplex pixelToComplex(int px, int py) const {
-        int dx = px - centerPx;
-        int dy = centerPy - py;
-        
-        GMPFloat dxGMP = GMPFloat(cast(double)dx);
-        GMPFloat dyGMP = GMPFloat(cast(double)dy);
-        
-        GMPFloat deltaX = dxGMP * pixelSize;
-        GMPFloat deltaY = dyGMP * pixelSize;
-        
-        GMPFloat cReal = centerX + deltaX;
-        GMPFloat cImag = centerY + deltaY;
+        GMPFloat pxG = GMPFloat(cast(double)px);
+        GMPFloat pyG = GMPFloat(cast(double)py);
+
+        // cr = px * pixelSize - (-originX + radius * (1 + di))
+        GMPFloat termRe1 = pxG * pixelSize;
+        GMPFloat negOriginX = GMPFloat(0.0) - originX;
+        GMPFloat onePlusDi = GMPFloat(1.0 + di);
+        GMPFloat termRe2 = negOriginX + radius * onePlusDi;
+        GMPFloat cReal = termRe1 - termRe2;
+
+        // ci = -(py * pixelSize) + (originY + radius * (1 + dr))
+        GMPFloat termIm1 = pyG * pixelSize;
+        GMPFloat negTermIm1 = GMPFloat(0.0) - termIm1;
+        GMPFloat onePlusDr = GMPFloat(1.0 + dr);
+        GMPFloat termIm2 = originY + radius * onePlusDr;
+        GMPFloat cImag = negTermIm1 + termIm2;
         
         return GMPComplex(cReal, cImag);
     }
     
     GMPComplex getCenter() const {
-        return GMPComplex(centerX.toString(), centerY.toString());
+        return GMPComplex(originX.toString(), originY.toString());
     }
 }
 

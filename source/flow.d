@@ -886,6 +886,24 @@ private void iterateGMPMode(ref IterResult[][] iters, const ref RenderConfig cfg
     DoubleDouble pixelSizeDD = DoubleDouble(pixelSizeGMP.toString());
     assert(pixelSizeDD.toDouble() != 0.0,
         "pixelSizeDD parsed as 0; pixelSizeGMP=" ~ pixelSizeGMP.toString());
+    
+    double w = cast(double)desc.width;
+    double h = cast(double)desc.height;
+    double minDimRel = min(w, h);
+    double di = 0, dr = 0;
+    if (desc.width != desc.height) {
+        double diff = (max(w, h) - minDimRel) / minDimRel;
+        di = desc.width > desc.height ? diff : 0;
+        dr = desc.width > desc.height ? 0 : diff;
+    }
+    double[] relXValues = new double[](desc.width);
+    foreach (i; 0 .. desc.width) {
+        relXValues[i] = (cast(double)i / minDimRel) * 2.0 - (1.0 + di);
+    }
+    double[] relYValues = new double[](desc.height);
+    foreach (j; 0 .. desc.height) {
+        relYValues[j] = (cast(double)j / minDimRel) * 2.0 - (1.0 + dr);
+    }
 
     MultiDouble pixelSizeMD;
     MultiDoubleComplex centerCoordMD;
@@ -1020,13 +1038,49 @@ private void iterateGMPMode(ref IterResult[][] iters, const ref RenderConfig cfg
                         break;
                     }
                     case PrecisionMethod.gmp: {
-                        if (zRefArrayDD.length > 0) {
-                            import perturbation_bla_hp : perturbIterateBLADDComplex;
-                            perturbResult = perturbIterateBLADDComplex(
-                                zRefArrayDD, escapeRadius2, blaEntriesArray, delta0DD, desc.dwell
+                        bool useScaledDelta = false;
+                        double delta0LogScale = 0.0;
+                        Complex!double delta0Norm;
+                        {
+                            double relX = relXValues[i];
+                            double relY = relYValues[j];
+                            bool isCenterPixelScaled = (relX == 0.0 && relY == 0.0);
+                            double delta0Real = relX * desc.radius * 2.0;
+                            double delta0Imag = relY * desc.radius * 2.0;
+                            double deltaAbsSq = delta0Real * delta0Real + delta0Imag * delta0Imag;
+                            bool deltaTooSmallForDouble = (!isCenterPixelScaled &&
+                                (deltaAbsSq == 0.0 ||
+                                 deltaAbsSq < SCALED_DELTA_THRESHOLD_SQUARED ||
+                                 forceScaledDelta));
+                            if (deltaTooSmallForDouble) {
+                                useScaledDelta = true;
+                                delta0Norm = Complex!double(relX * 2.0, relY * 2.0);
+                                auto ePos = radiusHP.countUntil!(c => c == 'e' || c == 'E')();
+                                if (ePos >= 0) {
+                                    delta0LogScale = to!double(radiusHP[ePos + 1 .. $]);
+                                } else {
+                                    delta0LogScale = std.math.log10(cast(double)desc.radius);
+                                }
+                            }
+                        }
+
+                        import perturbation_bla : perturbIterateBLAScaledArrays;
+                        if (useScaledDelta) {
+                            int refEscapeIter = refOrbit.escaped ? refOrbit.refIterations : -1;
+                            auto scaledResult = perturbIterateBLAScaledArrays(
+                                zRefArray, escapeRadius2, blaEntriesArray,
+                                delta0Norm, delta0LogScale, desc.dwell, refEscapeIter
                             );
+                            perturbResult = scaledResult;
                         } else {
-                            perturbResult = runDoublePerturb();
+                            if (zRefArrayDD.length > 0) {
+                                import perturbation_bla_hp : perturbIterateBLADDComplex;
+                                perturbResult = perturbIterateBLADDComplex(
+                                    zRefArrayDD, escapeRadius2, blaEntriesArray, delta0DD, desc.dwell
+                                );
+                            } else {
+                                perturbResult = runDoublePerturb();
+                            }
                         }
                         handled = true;
                         break;
