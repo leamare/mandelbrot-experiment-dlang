@@ -332,7 +332,10 @@ struct GMPPixelConverter {
         
         originX = GMPFloat(centerXStr);
         originY = GMPFloat(centerYStr);
-        radius  = GMPFloat(radiusStr);
+
+        // Why? Idk, it doesn't look right to me, but it's the only way to match
+        // reference viewpoint I guess? But that's a small part of the zoom, so maybe I'll remove this x2 later
+        radius  = GMPFloat(radiusStr) * GMPFloat(2.0);
         
         double wd = cast(double)w;
         double hd = cast(double)h;
@@ -352,7 +355,7 @@ struct GMPPixelConverter {
     
     GMPComplex pixelToComplex(int px, int py) const {
         GMPFloat pxG = GMPFloat(cast(double)px);
-        GMPFloat pyG = GMPFloat(cast(double)py);
+        GMPFloat pyG = GMPFloat(cast(double)(height - py));
 
         // cr = px * pixelSize - (-originX + radius * (1 + di))
         GMPFloat termRe1 = pxG * pixelSize;
