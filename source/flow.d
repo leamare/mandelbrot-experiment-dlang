@@ -480,6 +480,48 @@ uint selectDeltaMultiDoubleComponents(double perPixelDigits, uint referenceCompo
 }
 
 // =============================================================================
+// Iteration Statistics
+// =============================================================================
+
+private void displayIterationStats(const ref IterResult[][] iters, int width, int height, uint maxIterations) {
+    int minIter = int.max;
+    int maxIter = int.min;
+    long totalIter = 0;
+    long pixelCount = 0;
+    long maxIterCount = 0;
+    
+    foreach (i; 0 .. width) {
+        foreach (j; 0 .. height) {
+            int iter = iters[i][j].iterations;
+            if (iter < minIter) minIter = iter;
+            if (iter > maxIter) maxIter = iter;
+            totalIter += iter;
+            pixelCount++;
+            if (iter >= maxIterations) maxIterCount++;
+        }
+    }
+    
+    if (pixelCount == 0) {
+        writeln("\nIteration stats: No pixels computed");
+        return;
+    }
+    
+    if (minIter == int.max) minIter = 0;
+    if (maxIter == int.min) maxIter = 0;
+    
+    double avgIter = cast(double)totalIter / cast(double)pixelCount;
+    double inSetPercent = 100.0 * cast(double)maxIterCount / cast(double)pixelCount;
+    
+    writeln("\nIteration stats:");
+    writeln("  Min iterations: ", minIter);
+    writeln("  Max iterations: ", maxIter);
+    writeln("  Avg iterations: ", format!"%.1f"(avgIter));
+    writeln("  Pixels in set:  ", maxIterCount, " / ", pixelCount, 
+            " (", format!"%.1f"(inSetPercent), "%)");
+    stdout.flush();
+}
+
+// =============================================================================
 // Main Render Flow
 // =============================================================================
 
@@ -524,10 +566,12 @@ void brotFlow(RenderParams desc) {
     }
     writeln("Precision: ", precisionMsg);
     writeln("Filename: ", desc.filename);
+    stdout.flush();
 
     IterResult[][] iters = new IterResult[][](desc.width, desc.height);
 
 	writeln("\nIterating");
+    stdout.flush();
 
     if (desc.buddha != BuddhaMode.none) {
         iterateBuddhabrot(iters, cfg, desc, wfactor);
@@ -540,39 +584,78 @@ void brotFlow(RenderParams desc) {
     SuperImage img = image(desc.width, desc.height);
     
     writeln("\nGenerating image");
-    auto wRange = iota(0, desc.width);
-    foreach (i; parallel(wRange)) {
-        for (int j = 0; j < desc.height; j++) {
-            img[i, j] = computeColor(iters[i][j], cfg);
+    stdout.flush();
+    
+    {
+        import core.atomic;
+        shared int completedColumns = 0;
+        int totalColumns = desc.width;
+        shared int lastMilestone = 0;
+        
+        write("Progress: 0%");
+        stdout.flush();
+        
+        auto wRange = iota(0, desc.width);
+        foreach (i; parallel(wRange)) {
+            for (int j = 0; j < desc.height; j++) {
+                img[i, j] = computeColor(iters[i][j], cfg);
+            }
+            
+            int completed = atomicOp!"+="(completedColumns, 1);
+            int percent = cast(int)((cast(long)completed * 100) / totalColumns);
+            int milestone = percent / 5 * 5;
+            int oldMilestone = atomicLoad(lastMilestone);
+            if (milestone > oldMilestone && milestone <= 100) {
+                import core.atomic : cas;
+                if (cas(&lastMilestone, oldMilestone, milestone)) {
+                    write(" ", milestone, "%");
+                    stdout.flush();
+                }
+            }
         }
-        if (i % wfactor == 0) {
-            write('.');
-            stdout.flush();
-        }
+        writeln();
     }
     
-    writeln("\nSaving: " ~ workdir ~ "/" ~ desc.filename ~ ".png");
+    writeln("Saving: " ~ workdir ~ "/" ~ desc.filename ~ ".png");
+    stdout.flush();
     savePNG(img, workdir ~ "/" ~ desc.filename ~ ".png");
     
     writeln("--------------------\n");
+    stdout.flush();
 }
 
-private void iterateSimple(ref IterResult[][] iters, const ref RenderConfig cfg, 
-                          const ref RenderParams desc, int wfactor) {
+private void iterateSimple(ref IterResult[][] iters, const ref RenderConfig cfg, const ref RenderParams desc, int wfactor) {
+    import core.atomic;
     
     if (cfg.precisionMode == PrecisionMode.arbitrary) {
         iterateGMPMode(iters, cfg, desc, wfactor);
     } else {
+        shared int completedColumns = 0;
+        int totalColumns = desc.width;
+        shared int lastMilestone = 0;
+        
+        write("Progress: 0%");
+        stdout.flush();
+        
         auto wRange = iota(0, desc.width);
         foreach (i; parallel(wRange)) {
             for (int j = 0; j < desc.height; j++) {
                 iters[i][j] = iterate(i, j, cfg);
             }
-            if (i % wfactor == 0) {
-                write('.');
-                stdout.flush();
+            
+            int completed = atomicOp!"+="(completedColumns, 1);
+            int percent = cast(int)((cast(long)completed * 100) / totalColumns);
+            int milestone = percent / 5 * 5;
+            int oldMilestone = atomicLoad(lastMilestone);
+            if (milestone > oldMilestone && milestone <= 100) {
+                import core.atomic : cas;
+                if (cas(&lastMilestone, oldMilestone, milestone)) {
+                    write(" ", milestone, "%");
+                    stdout.flush();
+                }
             }
         }
+        writeln();
     }
 }
 
@@ -585,6 +668,7 @@ private void iterateGMPMode(ref IterResult[][] iters, const ref RenderConfig cfg
 
     if (cfg.fractalType != FractalType.mandelbrot) {
         writeln("Perturbation+BLA currently supports only the Mandelbrot set; falling back to direct iteration.");
+        stdout.flush();
         iterateGMPDirectMode(iters, cfg, desc, wfactor);
         return;
     }
@@ -593,6 +677,7 @@ private void iterateGMPMode(ref IterResult[][] iters, const ref RenderConfig cfg
     if (desc.arbitraryPrecisionMethod.length > 0) {
         precisionMethod = parsePrecisionMethod(desc.arbitraryPrecisionMethod);
         writeln("Using forced precision method: ", desc.arbitraryPrecisionMethod);
+        stdout.flush();
     } else if (desc.forcePrecision.length > 0) {
         string mode = desc.forcePrecision.toLower().strip();
         if (mode == "dd" || mode == "doubledouble") {
@@ -607,6 +692,11 @@ private void iterateGMPMode(ref IterResult[][] iters, const ref RenderConfig cfg
             precisionMethod = parsePrecisionMethod(mode);
         }
     }
+
+    writeln("Using direct GMP iteration (perturbation temporarily bypassed).");
+    stdout.flush();
+    iterateGMPDirectMode(iters, cfg, desc, wfactor);
+    return;
     
     uint viewportDigits = viewportPrecisionDigits(desc);
     uint coordDigitsRaw = coordinatePrecisionDigits(desc);
@@ -721,7 +811,8 @@ private void iterateGMPMode(ref IterResult[][] iters, const ref RenderConfig cfg
         desc.width, desc.height,
         originXHP, originYHP, radiusHP
     );
-    auto centerC = centerConverter.getCenter();
+    GMPComplex centerC = GMPComplex(0.0, 0.0);
+    centerConverter.getCenter(centerC);
     string centerXHPVerify = centerC.re.toString();
     string centerYHPVerify = centerC.im.toString();
     
@@ -979,7 +1070,8 @@ private void iterateGMPMode(ref IterResult[][] iters, const ref RenderConfig cfg
                 delta0 = Complex!double(deltaReDD.toDouble(), deltaImDD.toDouble());
                 
                 if (precisionMethod == PrecisionMethod.gmp) {
-                    auto pixelC = pixelConverterGMP.pixelToComplex(i, j);
+                    GMPComplex pixelC = GMPComplex(0.0, 0.0);
+                    pixelConverterGMP.pixelToComplex(i, j, pixelC);
                     delta0GMP = pixelC - cRefGMP;
                 }
                 
@@ -1293,7 +1385,9 @@ private void iterateGMPMode(ref IterResult[][] iters, const ref RenderConfig cfg
                 foreach (i; 0 .. desc.width) {
                     for (int j = 0; j < desc.height; j++) {
                         if (!uncertainMask[i][j]) continue;
-                        auto deltaExact = pixelConverterGMP.pixelToComplex(i, j) - cRefGMP;
+                        GMPComplex pixelC = GMPComplex(0.0, 0.0);
+                        pixelConverterGMP.pixelToComplex(i, j, pixelC);
+                        auto deltaExact = pixelC - cRefGMP;
                         auto perturbResult = perturbIterateBLAGMP(
                             zRefArrayGMP, escapeRadius2, blaEntriesArray,
                             deltaExact, desc.dwell
@@ -1360,7 +1454,8 @@ private void iterateGMPMode(ref IterResult[][] iters, const ref RenderConfig cfg
         samples ~= Coord(desc.width / 4, 3 * desc.height / 4);
         samples ~= Coord(3 * desc.width / 4, 3 * desc.height / 4);
         size_t verified = 0;
-        auto refPixel = verifyConverter.pixelToComplex(desc.width / 2, desc.height / 2);
+        GMPComplex refPixel = GMPComplex(0.0, 0.0);
+        verifyConverter.pixelToComplex(desc.width / 2, desc.height / 2, refPixel);
         MultiDoubleComplex cRefMD;
         bool haveCRefMD = false;
         if (precisionMethod == PrecisionMethod.multidouble && numDoublesForMD > 0) {
@@ -1388,7 +1483,8 @@ private void iterateGMPMode(ref IterResult[][] iters, const ref RenderConfig cfg
                 auto deltaImMDComp = dyMD * pixelSizeMD;
                 auto deltaReMD = deltaReMDComp.toDouble();
                 auto deltaImMD = deltaImMDComp.toDouble();
-                auto pixelGMP = verifyConverter.pixelToComplex(px, py);
+                GMPComplex pixelGMP = GMPComplex(0.0, 0.0);
+                verifyConverter.pixelToComplex(px, py, pixelGMP);
                 auto deltaGMPRe = (pixelGMP.re - refPixel.re).toDouble();
                 auto deltaGMPIm = (pixelGMP.im - refPixel.im).toDouble();
                 writeln("    Δapprox=( ", deltaReMD, ", ", deltaImMD, " ) vs Δexact=( ",
@@ -1412,14 +1508,17 @@ private void iterateGMPDirectMode(ref IterResult[][] iters, const ref RenderConf
                                   const ref RenderParams desc, int wfactor) {
     import gmp_arb : GMPFloat, GMPPixelConverter;
     import core.atomic;
+    import std.math : ceil;
+    import mandel : pixelToComplex;
     
-    uint digits = combinedPrecisionDigits(desc);
+    uint baseDigits = combinedPrecisionDigits(desc);
+    double perPixelDigits = digitsPerPixel(desc);
+    uint perPixelRequired = perPixelDigits > 0
+        ? cast(uint)ceil(perPixelDigits + 20.0)
+        : 0;
+    uint digits = max(baseDigits, perPixelRequired);
     
     GMPFloat.setPrecisionDigits(digits);
-    auto converter = GMPPixelConverter(
-        desc.width, desc.height,
-        desc.originXStr, desc.originYStr, desc.radiusStr
-    );
     
     auto gmpOptions = determineGMPFractalOptions(cfg.multibrotExp);
     bool gmpSupports = true;
@@ -1439,16 +1538,51 @@ private void iterateGMPDirectMode(ref IterResult[][] iters, const ref RenderConf
                 "; falling back to standard double precision for this render.");
     }
     
+    writeln("Using ", digits, " digit precision for GMP direct iteration");
+    stdout.flush();
+    
+    string originXStr = desc.originXStr;
+    string originYStr = desc.originYStr;
+    string radiusStr = desc.radiusStr;
+    int width = desc.width;
+    int height = desc.height;
+    
+    shared int completedColumns = 0;
+    int totalColumns = width;
+    shared int lastMilestone = 0;
+    
+    write("Progress: 0%");
+    stdout.flush();
+    
     auto wRange = iota(0, desc.width);
     foreach (i; parallel(wRange)) {
-        for (int j = 0; j < desc.height; j++) {
+        GMPFloat.setPrecisionDigits(digits);
+        
+        auto localConverter = GMPPixelConverter(
+            width, height,
+            originXStr, originYStr, radiusStr
+        );
+        for (int j = 0; j < height; j++) {
             if (gmpSupports) {
-                iters[i][j] = iterateGMPDirect(i, j, cfg, converter, gmpOptions);
+                iters[i][j] = iterateGMPDirect(i, j, cfg, localConverter, gmpOptions);
             } else {
                 iters[i][j] = iterate(i, j, cfg);
             }
         }
+        
+        int completed = atomicOp!"+="(completedColumns, 1);
+        int percent = cast(int)((cast(long)completed * 100) / totalColumns);
+        int milestone = percent / 5 * 5;
+        int oldMilestone = atomicLoad(lastMilestone);
+        if (milestone > oldMilestone && milestone <= 100) {
+            import core.atomic : cas;
+            if (cas(&lastMilestone, oldMilestone, milestone)) {
+                write(" ", milestone, "%");
+                stdout.flush();
+            }
+        }
     }
+    writeln();
 }
 
 private void iterateWithProgress(ref IterResult[][] iters, const ref RenderConfig cfg,

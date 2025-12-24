@@ -373,28 +373,45 @@ IterResult iterateStandard(int px, int py, const ref RenderConfig cfg) {
     return IterResult(iter, smoothed);
 }
 
-/// GMP-based arbitrary precision iteration
-IterResult iterateGMPDirect(int px, int py, const ref RenderConfig cfg, 
-                            const ref GMPPixelConverter converter,
-                            const GMPFractalOptions options) {
+IterResult iterateGMPDirect(int px, int py, const ref RenderConfig cfg, const ref GMPPixelConverter converter, const GMPFractalOptions options) {
     const double escapeRadius2 = (1 << 16);
-    auto c = converter.pixelToComplex(px, py);
-    auto z = GMPComplex.zero();
     
-    auto powComplexInt = (GMPComplex base, uint exponent) {
-        GMPComplex result = GMPComplex(GMPFloat(1.0), GMPFloat(0.0));
-        GMPComplex factor = base;
+    GMPComplex c = GMPComplex(0.0, 0.0);
+    GMPComplex z = GMPComplex(0.0, 0.0);
+    converter.pixelToComplex(px, py, c);
+    
+    GMPComplex tmp = GMPComplex(0.0, 0.0);
+    GMPComplex tmp2 = GMPComplex(0.0, 0.0);
+    
+    auto powComplexInt = (ref GMPComplex result, ref const GMPComplex base, uint exponent) {
+        result.re = GMPFloat(1.0);
+        result.im = GMPFloat(0.0);
+        
+        tmp2.re = base.re;
+        tmp2.im = base.im;
+        
         uint exp = exponent;
         while (exp > 0) {
             if (exp & 1) {
-                result = result * factor;
+                auto reRe = result.re * tmp2.re;
+                auto imIm = result.im * tmp2.im;
+                auto reIm = result.re * tmp2.im;
+                auto imRe = result.im * tmp2.re;
+                tmp.re = reRe - imIm;
+                tmp.im = reIm + imRe;
+                result.re = tmp.re;
+                result.im = tmp.im;
             }
             exp >>= 1;
             if (exp > 0) {
-                factor = factor * factor;
+                auto reRe = tmp2.re * tmp2.re;
+                auto imIm = tmp2.im * tmp2.im;
+                auto reIm = tmp2.re * tmp2.im;
+                auto imRe = tmp2.im * tmp2.re;
+                tmp2.re = reRe - imIm;
+                tmp2.im = reIm + imRe;
             }
         }
-        return result;
     };
 
     for (int iter = 0; iter < cfg.maxIterations; iter++) {
@@ -409,7 +426,10 @@ IterResult iterateGMPDirect(int px, int py, const ref RenderConfig cfg,
                 auto two = GMPFloat(2.0);
                 auto zrIm = z.re * z.im * two;
                 auto ziAbs = gmp_arb.abs(zrIm);
-                z = GMPComplex(zr2 - zi2 + c.re, ziAbs + c.im);
+                tmp.re = zr2 - zi2 + c.re;
+                tmp.im = ziAbs + c.im;
+                z.re = tmp.re;
+                z.im = tmp.im;
                 break;
             }
             case FractalType.multibrot: {
@@ -417,16 +437,23 @@ IterResult iterateGMPDirect(int px, int py, const ref RenderConfig cfg,
                 if (power <= 2) {
                     z.squareAndAdd(c);
                 } else {
-                    auto raised = powComplexInt(z, power);
-                    z = raised + c;
+                    powComplexInt(tmp, z, power);
+                    tmp.re = tmp.re + c.re;
+                    tmp.im = tmp.im + c.im;
+                    z.re = tmp.re;
+                    z.im = tmp.im;
                 }
                 break;
             }
             case FractalType.mandelbar: {
                 uint power = options.integerPower > 0 ? options.integerPower : 2;
-                auto conjZ = GMPComplex(z.re, -z.im);
-                auto raised = powComplexInt(conjZ, power);
-                z = raised + c;
+                tmp.re = z.re;
+                tmp.im = -z.im;
+                powComplexInt(tmp2, tmp, power);
+                tmp.re = tmp2.re + c.re;
+                tmp.im = tmp2.im + c.im;
+                z.re = tmp.re;
+                z.im = tmp.im;
                 break;
             }
         }

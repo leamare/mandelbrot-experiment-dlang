@@ -8,23 +8,41 @@ import std.string;
 import std.algorithm : max, min, countUntil;
 import std.math : log10, floor, pow, sqrt, log;
 import std.format : format;
+import std.traits : Unqual;
 
-/**
- * MPFR-based Arbitrary Precision Float
- * Uses MPFR (Multiple Precision Floating-Point Reliable) for high precision
- */
+private template isGMPFloat(T) {
+    enum isGMPFloat = is(Unqual!T == GMPFloat);
+}
+
+private template isGMPComplex(T) {
+    enum isGMPComplex = is(Unqual!T == GMPComplex);
+}
+
 struct GMPFloat {
     private Mpfr value;
-    private static mpfr_prec_t currentPrecision = 256;
+    
+    private static mpfr_prec_t currentPrecision() nothrow @nogc {
+        return _tlsPrecision;
+    }
+    private static void currentPrecision(mpfr_prec_t p) nothrow @nogc {
+        _tlsPrecision = p;
+    }
+    private static mpfr_prec_t _tlsPrecision = 256;
+    
     private bool isValid = false;
     
     @disable this();
     @disable this(this);
     
     static void setPrecisionDigits(uint digits) {
-        currentPrecision = cast(mpfr_prec_t)(digits * 3.32 + 32);
-        if (currentPrecision < 2) currentPrecision = 2;
-        if (currentPrecision > 100000) currentPrecision = 100000;
+        auto prec = cast(mpfr_prec_t)(digits * 3.32 + 32);
+        if (prec < 2) prec = 2;
+        if (prec > 100000) prec = 100000;
+        currentPrecision = prec;
+    }
+    
+    static mpfr_prec_t getPrecisionBits() nothrow @nogc {
+        return currentPrecision;
     }
     
     static GMPFloat zero() {
@@ -96,28 +114,28 @@ struct GMPFloat {
         return result;
     }
     
-    GMPFloat opBinary(string op)(const GMPFloat rhs) const if (op == "+") {
+    GMPFloat opBinary(string op, R)(auto ref R rhs) const if (op == "+" && isGMPFloat!R) {
         GMPFloat result = GMPFloat(0.0);
         import deimos.mpfr : mpfr_add;
         mpfr_add(result.value.mpfr, this.value.mpfr, rhs.value.mpfr, mpfr_rnd_t.MPFR_RNDN);
         return result;
     }
     
-    GMPFloat opBinary(string op)(const GMPFloat rhs) const if (op == "-") {
+    GMPFloat opBinary(string op, R)(auto ref R rhs) const if (op == "-" && isGMPFloat!R) {
         GMPFloat result = GMPFloat(0.0);
         import deimos.mpfr : mpfr_sub;
         mpfr_sub(result.value.mpfr, this.value.mpfr, rhs.value.mpfr, mpfr_rnd_t.MPFR_RNDN);
         return result;
     }
     
-    GMPFloat opBinary(string op)(const GMPFloat rhs) const if (op == "*") {
+    GMPFloat opBinary(string op, R)(auto ref R rhs) const if (op == "*" && isGMPFloat!R) {
         GMPFloat result = GMPFloat(0.0);
         import deimos.mpfr : mpfr_mul;
         mpfr_mul(result.value.mpfr, this.value.mpfr, rhs.value.mpfr, mpfr_rnd_t.MPFR_RNDN);
         return result;
     }
     
-    GMPFloat opBinary(string op)(const GMPFloat rhs) const if (op == "/") {
+    GMPFloat opBinary(string op, R)(auto ref R rhs) const if (op == "/" && isGMPFloat!R) {
         GMPFloat result = GMPFloat(0.0);
         import deimos.mpfr : mpfr_div;
         mpfr_div(result.value.mpfr, this.value.mpfr, rhs.value.mpfr, mpfr_rnd_t.MPFR_RNDN);
@@ -131,21 +149,24 @@ struct GMPFloat {
         return result;
     }
     
-    int opCmp(const GMPFloat rhs) const {
+    int opCmp(R)(auto ref R rhs) const if (isGMPFloat!R) {
         if (value < rhs.value) return -1;
         if (value > rhs.value) return 1;
         return 0;
     }
     
     int opCmp(double rhs) const {
-        return opCmp(GMPFloat(rhs));
+        auto rhsGMP = GMPFloat(rhs);
+        if (value < rhsGMP.value) return -1;
+        if (value > rhsGMP.value) return 1;
+        return 0;
     }
     
-    bool opEquals(const GMPFloat rhs) const {
+    bool opEquals(R)(auto ref R rhs) const if (isGMPFloat!R) {
         return value == rhs.value;
     }
     
-    ref GMPFloat opAssign(GMPFloat rhs) {
+    ref GMPFloat opAssign(GMPFloat rhs) return {
         if (!isValid) {
             import deimos.mpfr : mpfr_init2, mpfr_set_d;
             mpfr_init2(value.mpfr, currentPrecision);
@@ -165,9 +186,7 @@ struct GMPFloat {
         return this;
     }
     
-    ref GMPFloat opAssign(ref const GMPFloat rhs) {
-        if (this is rhs) return this;
-        
+    ref GMPFloat opAssign(ref const GMPFloat rhs) return {
         if (!isValid) {
             import deimos.mpfr : mpfr_init2, mpfr_set_d;
             mpfr_init2(value.mpfr, currentPrecision);
@@ -188,17 +207,20 @@ struct GMPFloat {
     }
 }
 
-GMPFloat sqr(const GMPFloat x) {
-    return x * x;
+GMPFloat sqr(R)(auto ref R x) if (isGMPFloat!R) {
+    GMPFloat result = GMPFloat(0.0);
+    import deimos.mpfr : mpfr_sqr;
+    mpfr_sqr(result.value.mpfr, x.value.mpfr, mpfr_rnd_t.MPFR_RNDN);
+    return result;
 }
 
-GMPFloat abs(GMPFloat x) {
-    return x < 0 ? -x : x;
+GMPFloat abs(R)(auto ref R x) if (isGMPFloat!R) {
+    GMPFloat result = GMPFloat(0.0);
+    import deimos.mpfr : mpfr_abs;
+    mpfr_abs(result.value.mpfr, x.value.mpfr, mpfr_rnd_t.MPFR_RNDN);
+    return result;
 }
 
-/**
- * GMP-based Complex Number
- */
 struct GMPComplex {
     GMPFloat re;
     GMPFloat im;
@@ -227,11 +249,13 @@ struct GMPComplex {
     }
     
     static GMPComplex zero() {
-        return GMPComplex(GMPFloat(0.0), GMPFloat(0.0));
+        return GMPComplex(0.0, 0.0);
     }
     
     GMPFloat magnitudeSquared() const {
-        return sqr(re) + sqr(im);
+        auto re2 = sqr(re);
+        auto im2 = sqr(im);
+        return re2 + im2;
     }
     
     double magnitudeSquaredDouble() const {
@@ -240,52 +264,64 @@ struct GMPComplex {
         return r * r + i * i;
     }
     
-    GMPComplex opBinary(string op)(const GMPComplex rhs) const if (op == "+") {
-        return GMPComplex(re + rhs.re, im + rhs.im);
+    GMPComplex opBinary(string op, R)(auto ref R rhs) const if (op == "+" && isGMPComplex!R) {
+        auto newRe = re + rhs.re;
+        auto newIm = im + rhs.im;
+        return GMPComplex(newRe, newIm);
     }
     
-    GMPComplex opBinary(string op)(const GMPComplex rhs) const if (op == "-") {
-        return GMPComplex(re - rhs.re, im - rhs.im);
+    GMPComplex opBinary(string op, R)(auto ref R rhs) const if (op == "-" && isGMPComplex!R) {
+        auto newRe = re - rhs.re;
+        auto newIm = im - rhs.im;
+        return GMPComplex(newRe, newIm);
     }
     
-    GMPComplex opBinary(string op)(const GMPComplex rhs) const if (op == "*") {
-        return GMPComplex(
-            re * rhs.re - im * rhs.im,
-            re * rhs.im + im * rhs.re
-        );
+    GMPComplex opBinary(string op, R)(auto ref R rhs) const if (op == "*" && isGMPComplex!R) {
+        auto ac = re * rhs.re;
+        auto bd = im * rhs.im;
+        auto ad = re * rhs.im;
+        auto bc = im * rhs.re;
+        auto newRe = ac - bd;
+        auto newIm = ad + bc;
+        return GMPComplex(newRe, newIm);
     }
     
     GMPComplex opBinary(string op)(double rhs) const if (op == "*") {
-        return GMPComplex(re * rhs, im * rhs);
+        auto newRe = re * rhs;
+        auto newIm = im * rhs;
+        return GMPComplex(newRe, newIm);
     }
     
     GMPComplex square() const {
         auto re2 = sqr(re);
         auto im2 = sqr(im);
         auto two = GMPFloat(2.0);
-        auto reim = re * im * two;
-        return GMPComplex(re2 - im2, reim);
+        auto reTimesIm = re * im;
+        auto twoReIm = reTimesIm * two;
+        auto newRe = re2 - im2;
+        return GMPComplex(newRe, twoReIm);
     }
     
-    void squareAndAdd(const GMPComplex c) {
+    void squareAndAdd(R)(auto ref R c) if (isGMPComplex!R) {
         auto re2 = sqr(re);
         auto im2 = sqr(im);
         auto two = GMPFloat(2.0);
-        auto reim = re * im * two;
-        re = re2 - im2 + c.re;
-        im = reim + c.im;
+        auto reTimesIm = re * im;
+        auto twoReIm = reTimesIm * two;
+        auto newRe = re2 - im2;
+        re = newRe + c.re;
+        im = twoReIm + c.im;
     }
     
-    ref GMPComplex opAssign(GMPComplex rhs) {
+    ref GMPComplex opAssign(GMPComplex rhs) return {
         re = rhs.re;
         im = rhs.im;
         return this;
     }
     
-    ref GMPComplex opAssign(ref const GMPComplex rhs) {
-        if (this is rhs) return this;
-        re = GMPFloat(rhs.re);
-        im = GMPFloat(rhs.im);
+    ref GMPComplex opAssign(ref const GMPComplex rhs) return {
+        re = rhs.re;
+        im = rhs.im;
         return this;
     }
 }
@@ -312,9 +348,6 @@ auto iterateGMP(string cRealStr, string cImagStr, uint maxIterations, double esc
     return tuple(maxIterations, cast(double)maxIterations);
 }
 
-/**
- * pixel converter
- */
 struct GMPPixelConverter {
     GMPFloat originX;
     GMPFloat originY;
@@ -325,6 +358,7 @@ struct GMPPixelConverter {
     int width, height;
     
     @disable this();
+    @disable this(this);
     
     this(int w, int h, string centerXStr, string centerYStr, string radiusStr) {
         width = w;
@@ -332,10 +366,10 @@ struct GMPPixelConverter {
         
         originX = GMPFloat(centerXStr);
         originY = GMPFloat(centerYStr);
-
-        // Why? Idk, it doesn't look right to me, but it's the only way to match
-        // reference viewpoint I guess? But that's a small part of the zoom, so maybe I'll remove this x2 later
-        radius  = GMPFloat(radiusStr) * GMPFloat(2.0);
+        
+        auto radiusBase = GMPFloat(radiusStr);
+        auto two = GMPFloat(2.0);
+        radius = radiusBase * two;
         
         double wd = cast(double)w;
         double hd = cast(double)h;
@@ -349,41 +383,45 @@ struct GMPPixelConverter {
             dr = w > h ? 0 : diff;
         }
 
-        GMPFloat two = GMPFloat(2.0);
-        pixelSize = (radius * two) / GMPFloat(minDim);
+        auto radiusTimeTwo = radius * two;
+        auto minDimGMP = GMPFloat(minDim);
+        pixelSize = radiusTimeTwo / minDimGMP;
     }
     
-    GMPComplex pixelToComplex(int px, int py) const {
-        GMPFloat pxG = GMPFloat(cast(double)px);
-        GMPFloat pyG = GMPFloat(cast(double)(height - py));
+    void pixelToComplex(int px, int py, ref GMPComplex result) const {
+        auto pxG = GMPFloat(cast(double)px + 0.5);
+        auto pyG = GMPFloat(cast(double)(height - py + 0.5));
 
-        // cr = px * pixelSize - (-originX + radius * (1 + di))
-        GMPFloat termRe1 = pxG * pixelSize;
-        GMPFloat negOriginX = GMPFloat(0.0) - originX;
-        GMPFloat onePlusDi = GMPFloat(1.0 + di);
-        GMPFloat termRe2 = negOriginX + radius * onePlusDi;
-        GMPFloat cReal = termRe1 - termRe2;
+        auto termRe1 = pxG * pixelSize;
+        auto negOriginX = -originX;
+        auto onePlusDi = GMPFloat(1.0 + di);
+        auto radiusTimesDi = radius * onePlusDi;
+        auto termRe2 = negOriginX + radiusTimesDi;
+        auto cReal = termRe1 - termRe2;
 
-        // ci = -(py * pixelSize) + (originY + radius * (1 + dr))
-        GMPFloat termIm1 = pyG * pixelSize;
-        GMPFloat negTermIm1 = GMPFloat(0.0) - termIm1;
-        GMPFloat onePlusDr = GMPFloat(1.0 + dr);
-        GMPFloat termIm2 = originY + radius * onePlusDr;
-        GMPFloat cImag = negTermIm1 + termIm2;
+        auto termIm1 = pyG * pixelSize;
+        auto negTermIm1 = -termIm1;
+        auto onePlusDr = GMPFloat(1.0 + dr);
+        auto radiusTimesDr = radius * onePlusDr;
+        auto termIm2 = originY + radiusTimesDr;
+        auto cImag = negTermIm1 + termIm2;
         
-        return GMPComplex(cReal, cImag);
+        result.re = cReal;
+        result.im = cImag;
     }
     
-    GMPComplex getCenter() const {
-        return GMPComplex(originX.toString(), originY.toString());
+    void getCenter(ref GMPComplex result) const {
+        result.re = GMPFloat(originX.toString());
+        result.im = GMPFloat(originY.toString());
     }
 }
 
-GMPComplex pixelToGMPComplex(
+void pixelToGMPComplex(
     int px, int py,
     int width, int height,
-    string originXStr, string originYStr, string radiusStr
+    string originXStr, string originYStr, string radiusStr,
+    ref GMPComplex result
 ) {
     auto converter = GMPPixelConverter(width, height, originXStr, originYStr, radiusStr);
-    return converter.pixelToComplex(px, py);
+    converter.pixelToComplex(px, py, result);
 }
