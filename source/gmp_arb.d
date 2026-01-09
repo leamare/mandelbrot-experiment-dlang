@@ -312,6 +312,48 @@ struct GMPComplex {
         re = newRe + c.re;
         im = twoReIm + c.im;
     }
+
+        
+    void absComponents() {
+        re = gmp_arb.abs(re);
+        im = gmp_arb.abs(im);
+    }
+    
+    void powAndAdd(R)(uint n, auto ref R c) if (isGMPComplex!R) {
+        if (n == 2) {
+            squareAndAdd(c);
+            return;
+        }
+        
+        auto result = GMPComplex.zero();
+        result.re = GMPFloat(1.0);
+        
+        auto base = GMPComplex(re, im);
+        uint power = n;
+        
+        while (power > 0) {
+            if (power & 1) {
+                result = result * base;
+            }
+            base = base.square();
+            power >>= 1;
+        }
+        
+        re = result.re + c.re;
+        im = result.im + c.im;
+    }
+    
+    void conjugateSquareAndAdd(R)(auto ref R c) if (isGMPComplex!R) {
+        auto re2 = sqr(re);
+        auto im2 = sqr(im);
+        auto two = GMPFloat(2.0);
+        auto reTimesIm = re * im;
+        auto twoReIm = reTimesIm * two;
+        auto newRe = re2 - im2;
+        auto negTwoReIm = -twoReIm;
+        re = newRe + c.re;
+        im = negTwoReIm + c.im;
+    }
     
     ref GMPComplex opAssign(GMPComplex rhs) return {
         re = rhs.re;
