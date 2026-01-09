@@ -313,7 +313,6 @@ struct GMPComplex {
         im = twoReIm + c.im;
     }
 
-        
     void absComponents() {
         re = gmp_arb.abs(re);
         im = gmp_arb.abs(im);
