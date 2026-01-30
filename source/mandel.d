@@ -10,7 +10,11 @@ import std.complex;
 import dlib.image.color;
 import dlib.image.hsv;
 
-import gmp_arb;
+import calc.types.mpfr;
+
+public import types.fractal : FractalType, GMPFractalOptions, determineGMPFractalOptions,
+                              ColorFunc, BuddhaMode, PrecisionMode;
+public import types.iter_result : IterResult;
 
 // =============================================================================
 // Types and Constants
@@ -19,131 +23,10 @@ import gmp_arb;
 const real LOG_BASE = 1.0 / log(2.0);
 
 alias Complex = Tuple!(real, real);
+
 alias Coord = Tuple!(int, int);
 
-struct IterResult {
-    int iterations;
-    double smoothed;
-    
-    this(int i, double s) {
-        iterations = i;
-        smoothed = s;
-    }
-}
-
-struct GMPFractalOptions {
-    bool hasIntegerPower;
-    uint integerPower;
-}
-
-enum FractalType { 
-    mandelbrot, 
-    multibrot, 
-    ship 
-}
-
-GMPFractalOptions determineGMPFractalOptions(double exponent) {
-    import std.math : round, fabs;
-    GMPFractalOptions opts;
-    double rounded = round(exponent);
-    if (fabs(exponent - rounded) <= 1e-9 && rounded >= 2 && rounded <= uint.max) {
-        opts.hasIntegerPower = true;
-        opts.integerPower = cast(uint)rounded;
-    }
-    return opts;
-}
-
-enum ColorFunc {
-    ultrafrac,
-    hsv,
-    gray,
-    blue,
-    red,
-    base,
-    seashore,
-    fire,
-    oceanid,
-    cnfsso,
-    acid,
-    softhours
-}
-
-enum BuddhaMode { 
-    none, 
-    buddha, 
-    antibuddha 
-}
-
-enum PrecisionMode {
-    standard,
-    arbitrary
-}
-
-// =============================================================================
-// Configuration Structs (no mutable global state)
-// =============================================================================
-
-struct RenderConfig {
-    real originX = -0.5;
-    real originY = 0.0;
-    real radius = 2.0;
-    
-    string originXStr = "-0.5";
-    string originYStr = "0.0";
-    string radiusStr = "2.0";
-    
-    int width = 800;
-    int height = 800;
-    
-    uint maxIterations = 100;
-    
-    FractalType fractalType = FractalType.mandelbrot;
-    float multibrotExp = 2.0;
-    
-    ColorFunc colorFunc = ColorFunc.ultrafrac;
-    int paletteSize = 100;
-    float paletteOffset = 0.0;
-    bool paletteReverse = false;
-    string paletteFile = "";
-    
-    BuddhaMode buddhaMode = BuddhaMode.none;
-    
-    PrecisionMode precisionMode = PrecisionMode.standard;
-    uint arbitraryPrecision = 50;
-    
-    static PrecisionMode detectPrecisionMode(real radius) {
-        if (radius < 1e-12) {
-            return PrecisionMode.arbitrary;
-        }
-        return PrecisionMode.standard;
-    }
-    
-    static uint calculatePrecision(real radius) {
-        // TODO: this looks like shit
-        if (radius >= 1e-10) return 30;
-        if (radius >= 1e-15) return 50;
-        if (radius >= 1e-20) return 70;
-        if (radius >= 1e-30) return 100;
-        return 150;
-    }
-    
-    static uint calculateOptimalPrecision(real radius, int width, int height) {
-        import std.math : log10, ceil;
-        import std.algorithm : max;
-        
-        int maxDim = max(width, height);
-        real pixelSpacing = (radius * 2.0) / maxDim;
-        
-        real logPixelSpacing = log10(pixelSpacing);
-        uint digitsNeeded = cast(uint)(ceil(-logPixelSpacing) + 25);
-        
-        uint minPrecision = 50;
-        
-        uint maxPrecision = 500;
-        
-        return max(minPrecision, min(digitsNeeded, maxPrecision));
-    }
-}
+public import types.render : RenderConfig;
 
 // =============================================================================
 // Color Palettes
@@ -153,7 +36,7 @@ __gshared Color4f[][string] _paletteCache;
 __gshared Object _paletteCacheMutex = new Object();
 
 Color4f[] getPalette(ColorFunc cf, string paletteFile = "", bool reverse = false) {
-    import palette_loader : loadPaletteFromFile, reversePalette;
+    import config.palette : loadPaletteFromFile, reversePalette;
     import std.conv;
     import std.format;
     
@@ -421,11 +304,11 @@ IterResult iterateGMPDirect(int px, int py, const ref RenderConfig cfg, const re
                 break;
             }
             case FractalType.ship: {
-                auto zr2 = gmp_arb.sqr(z.re);
-                auto zi2 = gmp_arb.sqr(z.im);
+                auto zr2 = calc.types.mpfr.sqr(z.re);
+                auto zi2 = calc.types.mpfr.sqr(z.im);
                 auto two = GMPFloat(2.0);
                 auto zrIm = z.re * z.im * two;
-                auto ziAbs = gmp_arb.abs(zrIm);
+                auto ziAbs = calc.types.mpfr.abs(zrIm);
                 tmp.re = zr2 - zi2 + c.re;
                 tmp.im = ziAbs + c.im;
                 z.re = tmp.re;
