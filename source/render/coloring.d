@@ -10,7 +10,7 @@ import dlib.image.hsv : hsv;
 import types.fractal;
 import types.iter_result;
 import types.render;
-import palette_loader;
+import config.palette;
 
 Color4f computeColor(const ref IterResult result, const ref RenderConfig cfg) {
     return computeColorWithPalette(result, cfg, null);
