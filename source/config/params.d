@@ -112,7 +112,7 @@ struct RenderParams {
     void applyPixelOffset() {
         if (x_px_offset == 0 && y_px_offset == 0) return;
         
-        import gmp_arb : GMPFloat, GMPPixelConverter;
+        import calc.types.mpfr : GMPFloat, GMPPixelConverter;
         
         uint digits = combinedPrecisionDigits(originXStr, originYStr, radiusStr, radius);
         digits = digits > 50 ? digits : 50;
@@ -127,7 +127,7 @@ struct RenderParams {
         int newCenterX = width / 2 + x_px_offset;
         int newCenterY = height / 2 + y_px_offset;
         
-        import gmp_arb : GMPComplex;
+        import calc.types.mpfr : GMPComplex;
         auto newOrigin = GMPComplex.zero();
         converter.pixelToComplex(newCenterX, newCenterY, newOrigin);
         

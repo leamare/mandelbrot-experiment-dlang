@@ -101,7 +101,7 @@ void iterateRowPerturbation(
     string refCenterYStr,
     uint maxIterations
 ) {
-    import gmp_arb : GMPFloat;
+    import calc.types.mpfr : GMPFloat;
     
     double refX = 0, refY = 0;
     try {

@@ -4,7 +4,7 @@
 module calc.perturbation.reference;
 
 import std.complex : Complex;
-import gmp_arb : GMPFloat, GMPComplex;
+import calc.types.mpfr : GMPFloat, GMPComplex;
 import precision.constants;
 
 struct ReferenceOrbit {

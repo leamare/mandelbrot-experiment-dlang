@@ -123,7 +123,7 @@ IterResult iterateGMP(
     ref const GMPPixelConverter converter,
     GMPFractalOptions gmpOptions = GMPFractalOptions.init
 ) {
-    import gmp_arb : GMPFloat, GMPComplex, GMPPixelConverter;
+    import calc.types.mpfr : GMPFloat, GMPComplex, GMPPixelConverter;
     
     auto c = GMPComplex.zero();
     converter.pixelToComplex(px, py, c);
@@ -163,14 +163,13 @@ IterResult iterateGMP(
                     iter++;
                 }
             } else {
-                return iterateDouble(
-                    cfg.originX + (px - cfg.width/2.0) * cfg.radius * 2.0 / cfg.width,
-                    cfg.originY + (py - cfg.height/2.0) * cfg.radius * 2.0 / cfg.height,
-                    cfg.maxIterations,
-                    cfg.escapeRadius,
-                    cfg.fractalType,
-                    cfg.multibrotExp
-                );
+                double exp = cfg.multibrotExp;
+                while (iter < cfg.maxIterations) {
+                    double mag2 = z.magnitudeSquaredDouble();
+                    if (mag2 > escapeRadius2) break;
+                    z.powFractionalAndAdd(exp, c);
+                    iter++;
+                }
             }
             break;
             
@@ -197,7 +196,7 @@ IterResult iterateGMP(
     return IterResult(iter, smoothed);
 }
 
-import gmp_arb : GMPPixelConverter;
+import calc.types.mpfr : GMPPixelConverter;
 
 IterResult iterate(
     int px, int py,
@@ -235,7 +234,7 @@ IterResult iterate(
         return iterateQuadDouble(px, py, cfg, converter);
     }
     
-    import gmp_arb : GMPFloat;
+    import calc.types.mpfr : GMPFloat;
     import precision.auto_settings : combinedPrecisionDigits;
     
     uint digits = combinedPrecisionDigits(cfg.originXStr, cfg.originYStr, cfg.radiusStr, cfg.radius);
