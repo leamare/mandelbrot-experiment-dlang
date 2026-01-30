@@ -86,7 +86,7 @@ IterResult iterateQuadDouble(
     const ref RenderConfig cfg,
     ref const QDPixelConverter converter
 ) {
-    import calc.quaddouble : QuadDouble, QDComplex, QDPixelConverter, sqr;
+    import calc.types.quaddouble : QuadDouble, QDComplex, QDPixelConverter, sqr;
     
     auto c = converter.pixelToComplex(px, py);
     auto z = QDComplex.zero();

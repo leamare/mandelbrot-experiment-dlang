@@ -1,17 +1,11 @@
 /**
  * QuadDouble - Quad-Precision Floating Point
  * 
- * Represents a number as the unevaluated sum of four doubles:
- *   value = d0 + d1 + d2 + d3
- * 
- * where |d1| <= ulp(d0)/2, |d2| <= ulp(d1)/2, |d3| <= ulp(d2)/2
- * 
- * This provides approximately 212 bits of mantissa precision
- * (~62 decimal digits) compared to double's 53 bits (~15 digits).
+ * Represents a number as the unevaluated sum of four doubles
  * 
  * Based on the QD library algorithms by Hida, Li, and Bailey.
  */
-module calc.quaddouble;
+module calc.types.quaddouble;
 
 import std.math;
 import std.conv : to;
@@ -125,9 +119,6 @@ struct QuadDouble {
         return 0;
     }
     
-    // =========================================================================
-    // Core error-free transformations
-    // =========================================================================
     
     private static void quickTwoSum(double a, double b, out double s, out double e) {
         s = a + b;
@@ -141,7 +132,7 @@ struct QuadDouble {
     }
     
     private static void split(double a, out double hi, out double lo) {
-        enum double SPLIT = 134217729.0;  // 2^27 + 1
+        enum double SPLIT = 134217729.0;
         double t = SPLIT * a;
         hi = t - (t - a);
         lo = a - hi;
@@ -174,10 +165,6 @@ struct QuadDouble {
         
         quickTwoSum(e, s1, x[2], x[3]);
     }
-    
-    // =========================================================================
-    // Arithmetic operations
-    // =========================================================================
     
     QuadDouble opUnary(string op)() const if (op == "-") {
         return QuadDouble(-x[0], -x[1], -x[2], -x[3]);
