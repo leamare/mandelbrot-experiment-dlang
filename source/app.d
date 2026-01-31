@@ -10,6 +10,7 @@ import std.json;
 
 import mandel;
 import flow;
+import config.params : RenderParams;
 
 int main(string[] args) {
     int amp = 50;

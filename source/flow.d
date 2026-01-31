@@ -19,9 +19,19 @@ import dlib.image;
 
 import mandel;
 import calc.types.mpfr;
-import calc.types.quaddouble : QuadDouble, QDComplex, QDPixelConverter;
-import calc.iterator : iterateGMP;
-import types.fractal : GMPFractalOptions, determineGMPFractalOptions, FractalType, ColorFunc, BuddhaMode, PrecisionMode;
+import calc.types.quaddouble;
+import calc.iterate;
+import calc.iterate.double_iter : pixelToComplex, complexToPixel, iterateWithOrbit, 
+                                  OrbitResult, ComplexD, Coord;
+import calc.iterate.dispatcher : iterateAll;
+import calc.buddha : BuddhaAccumulator;
+import types.fractal : GMPFractalOptions, determineGMPFractalOptions, FractalType, 
+                       ColorFunc, BuddhaMode, PrecisionMode;
+import types.render : RenderConfig;
+import render.coloring : computeColor;
+import config.params : RenderParams;
+import utils.dwell : estimateDwell;
+import utils.precision_auto : combinedPrecisionDigits, digitsPerPixel, getZoomExponent;
 
 import precision.constants;
 
@@ -29,377 +39,17 @@ string workdir = "out";
 int saveProgress = 0;
 bool skipExisting = false;
 
-struct RenderParams {
-    int width = 800;
-    int height = 800;
-
-    string originXStr = "-0.5";
-    string originYStr = "0.0";
-    string radiusStr = "2.0";
-
-    real originX = -0.5;
-    real originY = 0.0;
-    real radius = 2.0;
-
-    int palette = 0;
-    float paletteOffset = 0.0;
-    bool paletteReverse = false;
-    string paletteFile = "";
-    uint dwell = 100;
-    bool autoDwell = false;
-    string filename;
-
-    float multibrotExp = 2.0;
-
-    FractalType fractalType = FractalType.mandelbrot;
-    ColorFunc colorfunc = ColorFunc.ultrafrac;
-    BuddhaMode buddha = BuddhaMode.none;
-    
-    string forcePrecision = "";
-    
-    string arbitraryPrecisionMethod = "";
-    
-    int x_px_offset = 0;
-    int y_px_offset = 0;
-    
-    void applyPixelOffset() {
-        if (x_px_offset == 0 && y_px_offset == 0) {
-            return;
-        }
-        
-        double minDim = min(cast(double)width, cast(double)height);
-        double pixelSpacing = (radius * 2.0) / minDim;
-        
-        double offsetX = -x_px_offset * pixelSpacing;
-        double offsetY = y_px_offset * pixelSpacing;
-        
-        originX += offsetX;
-        originY += offsetY;
-        
-        if (originXStr.length > 0) {
-            try {
-                real currentX = to!real(originXStr);
-                originXStr = format!"%.20g"(currentX + offsetX);
-            } catch (Exception) {
-                originXStr = format!"%.20g"(originX);
-            }
-        } else {
-            originXStr = format!"%.20g"(originX);
-        }
-        
-        if (originYStr.length > 0) {
-            try {
-                real currentY = to!real(originYStr);
-                originYStr = format!"%.20g"(currentY + offsetY);
-            } catch (Exception) {
-                originYStr = format!"%.20g"(originY);
-            }
-        } else {
-            originYStr = format!"%.20g"(originY);
-        }
-    }
-    
-    PrecisionMode precisionMode() const {
-        if (forcePrecision.length > 0) {
-            string mode = forcePrecision.toLower().strip();
-            if (mode == "arbitrary" || mode == "gmp" || mode == "high") {
-                return PrecisionMode.arbitrary;
-            } else if (mode == "standard" || mode == "double" || mode == "low") {
-                return PrecisionMode.standard;
-            }
-        }
-        
-        if (radiusStr.length > 0) {
-            auto ePos = radiusStr.countUntil!(c => c == 'e' || c == 'E')();
-            if (ePos >= 0) {
-                try {
-                    int exp = to!int(radiusStr[ePos + 1 .. $]);
-                    if (exp < -12) return PrecisionMode.arbitrary;
-                } catch (Exception) {}
-            }
-        }
-        return RenderConfig.detectPrecisionMode(radius);
-    }
-    
-    uint requiredPrecision() const {
-        return RenderConfig.calculateOptimalPrecision(radius, width, height);
-    }
-    
-    RenderConfig toRenderConfig() const {
-        RenderConfig cfg;
-        cfg.originX = originX;
-        cfg.originY = originY;
-        cfg.radius = radius;
-        cfg.originXStr = originXStr;
-        cfg.originYStr = originYStr;
-        cfg.radiusStr = radiusStr;
-        cfg.width = width;
-        cfg.height = height;
-        cfg.maxIterations = dwell;
-        cfg.fractalType = fractalType;
-        cfg.multibrotExp = multibrotExp;
-        cfg.colorFunc = colorfunc;
-        cfg.paletteSize = palette > 0 ? palette : dwell;
-        cfg.paletteOffset = paletteOffset;
-        cfg.paletteFile = paletteFile;
-        cfg.paletteReverse = paletteReverse;
-        cfg.buddhaMode = buddha;
-        cfg.precisionMode = precisionMode();
-        cfg.arbitraryPrecision = requiredPrecision();
-        return cfg;
-    }
+uint combinedPrecisionDigitsForParams(const ref RenderParams desc) {
+    return combinedPrecisionDigits(desc.originXStr, desc.originYStr, desc.radiusStr, desc.radius);
 }
 
-// =============================================================================
-// Buddhabrot Data Collection (Thread-Safe)
-// =============================================================================
-
-struct BuddhaAccumulator {
-    private int[][] globalData;
-    private int width, height;
-    
-    this(int w, int h) {
-        width = w;
-        height = h;
-        globalData = new int[][](w, h);
-        foreach (ref row; globalData) {
-            row[] = 0;
-        }
-    }
-    
-    int[][] createLocalBuffer() {
-        auto local = new int[][](width, height);
-        foreach (ref row; local) {
-            row[] = 0;
-        }
-        return local;
-    }
-    
-    void mergeLocal(int[][] local) {
-        foreach (x; 0 .. width) {
-            foreach (y; 0 .. height) {
-                globalData[x][y] += local[x][y];
-            }
-        }
-    }
-    
-    static void recordHit(ref int[][] buffer, int x, int y, int width, int height) {
-        if (x >= 0 && x < width && y >= 0 && y < height) {
-            buffer[x][y]++;
-        }
-    }
-    
-    int maxHits() {
-        int maxVal = 0;
-        foreach (row; globalData) {
-            foreach (val; row) {
-                if (val > maxVal) maxVal = val;
-            }
-        }
-        return maxVal;
-    }
-    
-    ref int[][] data() { return globalData; }
-}
-
-// =============================================================================
-// Auto-Dwell Calculation
-// =============================================================================
-
-int getZoomExponent(string radiusStr) {
-    auto ePos = radiusStr.countUntil!(c => c == 'e' || c == 'E')();
-    if (ePos >= 0) {
-        return to!int(radiusStr[ePos + 1 .. $]);
-    }
-    // Try parsing as double
-    try {
-        double r = to!double(radiusStr);
-        if (r > 0) return cast(int)floor(log10(r));
-    } catch (Exception) {}
-    return 0;
-}
-
-uint estimateDwell(string radiusStr) {
-    int exp = getZoomExponent(radiusStr);
-    int zoomDepth = -exp;  // Positive number for zoom depth
-    
-    if (zoomDepth <= 0) return 100;
-    
-    if (zoomDepth <= 15) {
-        return cast(uint)(100 + zoomDepth * zoomDepth * 10);
-    } else if (zoomDepth <= 50) {
-        return cast(uint)(1000 + pow(cast(double)zoomDepth, 1.5) * 50);
-    } else if (zoomDepth <= 200) {
-        return cast(uint)(5000 + pow(cast(double)zoomDepth, 1.3) * 100);
-    } else {
-        return cast(uint)(20000 + pow(cast(double)zoomDepth, 1.2) * 50);
-    }
-}
-
-double digitsPerPixel(const RenderParams desc) {
-    import std.math : log10, isFinite;
-    int maxDim = max(desc.width, desc.height);
-    if (maxDim <= 0) {
-        return 0.0;
-    }
-    real radiusReal = desc.radius;
-    real spacingReal = (radiusReal * 2.0L) / cast(real)maxDim;
-    double pixelSpacing = cast(double)spacingReal;
-    if (pixelSpacing > 0 && isFinite(pixelSpacing)) {
-        return -log10(pixelSpacing);
-    }
-    int exp = getZoomExponent(desc.radiusStr);
-    if (exp == 0) {
-        return 0.0;
-    }
-    double logMaxDim = log10(cast(double)maxDim);
-    double logPixelSpacing = log10(2.0) + exp - logMaxDim;
-    return -logPixelSpacing * 1.25;
-}
-
-uint viewportPrecisionDigits(const RenderParams desc) {
-    import std.math : isFinite;
-    real radiusReal = desc.radius;
-    if ((!isFinite(radiusReal) || radiusReal <= 0) && desc.radiusStr.length > 0) {
-        try {
-            radiusReal = to!real(desc.radiusStr);
-        } catch (Exception) {
-            radiusReal = 0;
-        }
-    }
-    if (radiusReal > 0 && isFinite(radiusReal)) {
-        return RenderConfig.calculateOptimalPrecision(radiusReal, desc.width, desc.height);
-    }
-    auto coordLen = max(desc.originXStr.length, desc.originYStr.length);
-    return cast(uint)max(50, coordLen + 20);
-}
-
-uint coordinatePrecisionDigits(const RenderParams desc) {
-    auto xLen = desc.originXStr.length;
-    auto yLen = desc.originYStr.length;
-    
-    uint xDigits = 0, yDigits = 0;
-    foreach (c; desc.originXStr) {
-        if (c >= '0' && c <= '9') xDigits++;
-    }
-    foreach (c; desc.originYStr) {
-        if (c >= '0' && c <= '9') yDigits++;
-    }
-    
-    return max(xDigits, yDigits);
-}
-
-enum uint COORDINATE_SAFETY_MARGIN = 30;
-
-private uint clampCoordinateDigits(uint viewportDigits, uint coordDigitsRaw) {
-    return coordDigitsRaw > viewportDigits + COORDINATE_SAFETY_MARGIN
-        ? viewportDigits + COORDINATE_SAFETY_MARGIN
-        : coordDigitsRaw;
-}
-
-enum uint COORDINATE_TRIM_EXTRA_DIGITS = 8;
-
-private string trimCoordinatePrecision(string value, uint maxFractionDigits) {
-    if (maxFractionDigits == uint.max) {
-        return value;
-    }
-    auto str = value.strip();
-    if (str.length == 0) {
-        return str;
-    }
-    auto ePos = str.countUntil!(c => c == 'e' || c == 'E')();
-    string exponentPart = ePos >= 0 ? str[ePos .. $] : "";
-    string mantissa = ePos >= 0 ? str[0 .. ePos] : str;
-    auto dotPos = mantissa.countUntil('.');
-    if (dotPos < 0) {
-        return str;
-    }
-
-    size_t start = dotPos + 1;
-    size_t available = mantissa.length > start ? mantissa.length - start : 0;
-    size_t keepDigits = cast(size_t)maxFractionDigits + COORDINATE_TRIM_EXTRA_DIGITS;
-    if (available <= keepDigits) {
-        return str;
-    }
-
-    size_t end = min(mantissa.length, start + keepDigits);
-    string trimmed;
-    if (keepDigits == 0) {
-        trimmed = mantissa[0 .. dotPos];
-    } else {
-        trimmed = mantissa[0 .. end];
-    }
-    if (trimmed.length > 0 && trimmed[$ - 1] == '.') {
-        trimmed = trimmed[0 .. $ - 1];
-    }
-    return trimmed ~ exponentPart;
-}
-
-double computeLog10FromDecimal(string value, double fallbackValue) {
-    import std.math : isFinite, log10;
-    string trimmed = value.strip();
-    double fallbackLog = fallbackValue > 0 && isFinite(fallbackValue)
-        ? log10(fallbackValue)
-        : 0.0;
-    if (trimmed.length == 0) {
-        return fallbackLog;
-    }
-    
-    try {
-        real parsed = to!real(trimmed);
-        if (parsed > 0) {
-            return log10(cast(double)parsed);
-        } else if (parsed < 0) {
-            return log10(-cast(double)parsed);
-        }
-        return -double.infinity;
-    } catch (Exception) {
-        auto ePos = countUntil(trimmed, 'e');
-        if (ePos == -1) ePos = countUntil(trimmed, 'E');
-        
-        if (ePos != -1) {
-            try {
-                double mantissa = to!double(trimmed[0..ePos]);
-                int exponent = to!int(trimmed[ePos+1..$]);
-                if (mantissa > 0) {
-                    return log10(mantissa) + exponent;
-                } else if (mantissa < 0) {
-                    return log10(-mantissa) + exponent;
-                }
-            } catch (Exception) {}
-        }
-        return fallbackLog;
-    }
-}
-
-uint combinedPrecisionDigits(const RenderParams desc) {
-    auto viewportDigits = viewportPrecisionDigits(desc);
-    auto coordDigitsRaw = coordinatePrecisionDigits(desc);
-    auto coordDigits = clampCoordinateDigits(viewportDigits, coordDigitsRaw);
-    return max(viewportDigits, coordDigits);
+double digitsPerPixelForParams(const ref RenderParams desc) {
+    return digitsPerPixel(desc.radius, desc.width, desc.height, desc.radiusStr);
 }
 
 int estimatePalette(uint dwell) {
-    if (dwell <= 1000) {
-        return max(50, cast(int)(dwell * 0.5));
-    } else if (dwell <= 10000) {
-        return max(100, cast(int)(sqrt(cast(double)dwell) * 10));
-    } else if (dwell <= 100000) {
-        return max(200, min(cast(int)(sqrt(cast(double)dwell) * 5), 2000));
-    } else {
-        return max(500, min(cast(int)(sqrt(cast(double)dwell)), 3000));
-    }
-}
-
-enum uint QUADDOUBLE_COMPONENTS = 4;
-enum uint QUADDOUBLE_DIGITS_PER_COMPONENT = 15;
-
-uint selectQuadDoubleComponents(uint digits, const RenderParams desc) {
-    return QUADDOUBLE_COMPONENTS;
-}
-
-uint selectDeltaQuadDoubleComponents(double perPixelDigits, uint referenceComponents) {
-    return QUADDOUBLE_COMPONENTS;
+    import utils.color : estimatePalette;
+    return cast(int)estimatePalette(dwell);
 }
 
 // =============================================================================
@@ -496,12 +146,12 @@ void brotFlow(RenderParams desc) {
 	writeln("\nIterating");
     stdout.flush();
 
-    if (desc.buddha != BuddhaMode.none) {    
+    if (desc.buddha != BuddhaMode.none) {
         iterateBuddhabrot(iters, cfg, desc, wfactor);
     } else if (saveProgress > 0 && saveProgress < 50) {
         iterateWithProgress(iters, cfg, desc, wfactor);
     } else {
-        iterateSimple(iters, cfg, desc, wfactor);
+        iterateAll(iters, cfg, desc, true, null);
     }
     
     displayIterationStats(iters, desc.width, desc.height, cfg.maxIterations);
@@ -549,195 +199,114 @@ void brotFlow(RenderParams desc) {
     stdout.flush();
 }
 
-private void iterateSimple(ref IterResult[][] iters, const ref RenderConfig cfg, 
-                          const ref RenderParams desc, int wfactor) {
-    import core.atomic;
-    
-    if (cfg.precisionMode == PrecisionMode.arbitrary) {
-        iterateGMPMode(iters, cfg, desc, wfactor);
-    } else {
-        shared int completedColumns = 0;
-        int totalColumns = desc.width;
-        shared int lastMilestone = 0;
-        
-        write("Progress: 0%");
-        stdout.flush();
-        
-        auto wRange = iota(0, desc.width);
-        foreach (i; parallel(wRange)) {
-            for (int j = 0; j < desc.height; j++) {
-                iters[i][j] = iterate(i, j, cfg);
-            }
-            
-            int completed = atomicOp!"+="(completedColumns, 1);
-            int percent = cast(int)((cast(long)completed * 100) / totalColumns);
-            int milestone = percent / 5 * 5;
-            int oldMilestone = atomicLoad(lastMilestone);
-            if (milestone > oldMilestone && milestone <= 100) {
-                import core.atomic : cas;
-                if (cas(&lastMilestone, oldMilestone, milestone)) {
-                    write(" ", milestone, "%");
-                    stdout.flush();
-                }
-            }
-        }
-        writeln();
-    }
-}
-
-private void iterateGMPMode(ref IterResult[][] iters, const ref RenderConfig cfg,
-                            const ref RenderParams desc, int wfactor) {
-    import precision.method : PrecisionMethod, parsePrecisionMethod, selectPrecisionMethod;
-    import std.complex;
-    import core.atomic;
-
-    if (cfg.fractalType != FractalType.mandelbrot) {
-        writeln("Perturbation+BLA currently supports only the Mandelbrot set; falling back to direct iteration.");
-        stdout.flush();
-        iterateGMPDirectMode(iters, cfg, desc, wfactor);
-        return;
-    }
-    
-    PrecisionMethod precisionMethod = PrecisionMethod.auto_;
-    
-    if (desc.arbitraryPrecisionMethod.length > 0) {
-        precisionMethod = parsePrecisionMethod(desc.arbitraryPrecisionMethod);
-        writeln("Using forced precision method: ", desc.arbitraryPrecisionMethod);
-        stdout.flush();
-    } else if (desc.forcePrecision.length > 0) {
-        string mode = desc.forcePrecision.toLower().strip();
-        precisionMethod = parsePrecisionMethod(mode);
-    }
-    
-    writeln("Using direct GMP iteration (perturbation temporarily bypassed).");
-    stdout.flush();
-    iterateGMPDirectMode(iters, cfg, desc, wfactor);
-    return;
-}
-
-private void iterateGMPDirectMode(ref IterResult[][] iters, const ref RenderConfig cfg,
-                                  const ref RenderParams desc, int wfactor) {
-    import core.atomic;
-    import std.math : ceil;
-    import calc.iterator : iterateGMP;
-    
-    uint baseDigits = combinedPrecisionDigits(desc);
-    double perPixelDigits = digitsPerPixel(desc);
-    uint perPixelRequired = perPixelDigits > 0
-        ? cast(uint)ceil(perPixelDigits + 20.0)
-        : 0;
-    uint digits = max(baseDigits, perPixelRequired);
-    
-    GMPFloat.setPrecisionDigits(digits);
-    
-    auto gmpOptions = determineGMPFractalOptions(cfg.multibrotExp);
-    
-    if (cfg.fractalType == FractalType.multibrot && !gmpOptions.hasIntegerPower) {
-        writeln("Using MPFR fractional power (De Moivre's formula) for exponent ", cfg.multibrotExp);
-    }
-    
-    writeln("Using ", digits, " digit precision for GMP direct iteration");
-    stdout.flush();
-    
-    string originXStr = desc.originXStr;
-    string originYStr = desc.originYStr;
-    string radiusStr = desc.radiusStr;
-    int width = desc.width;
-    int height = desc.height;
-    
-    shared int completedColumns = 0;
-    int totalColumns = width;
-    shared int lastMilestone = 0;
-    
-    write("Progress: 0%");
-    stdout.flush();
-    
-    auto wRange = iota(0, desc.width);
-    foreach (i; parallel(wRange)) {
-        GMPFloat.setPrecisionDigits(digits);
-        
-        auto localConverter = GMPPixelConverter(
-            width, height,
-            originXStr, originYStr, radiusStr
-        );
-        for (int j = 0; j < height; j++) {
-            iters[i][j] = iterateGMP(i, j, cfg, localConverter, gmpOptions);
-        }
-        
-        int completed = atomicOp!"+="(completedColumns, 1);
-        int percent = cast(int)((cast(long)completed * 100) / totalColumns);
-        int milestone = percent / 5 * 5;
-        int oldMilestone = atomicLoad(lastMilestone);
-        if (milestone > oldMilestone && milestone <= 100) {
-            import core.atomic : cas;
-            if (cas(&lastMilestone, oldMilestone, milestone)) {
-                write(" ", milestone, "%");
-                stdout.flush();
-            }
-        }
-    }
-    writeln();
-}
-
 private void iterateWithProgress(ref IterResult[][] iters, const ref RenderConfig cfg,
                                  const ref RenderParams desc, int wfactor) {
-		int loaded = 0;
+    import calc.iterate.double_iter : iterateDouble;
+    import calc.iterate.mpfr_iter : MPFRPixelConverter, iterateMPFR;
+    import std.math : ceil;
+    
+    bool useMPFR = cfg.precisionMode == PrecisionMode.arbitrary;
+    
+    uint digits = 50;
+    GMPFractalOptions gmpOptions;
+    string originXStr, originYStr, radiusStr;
+    
+    if (useMPFR) {
+        uint baseDigits = combinedPrecisionDigitsForParams(desc);
+        double perPixelDigits = digitsPerPixelForParams(desc);
+        uint perPixelRequired = perPixelDigits > 0
+            ? cast(uint)ceil(perPixelDigits + 20.0)
+            : 0;
+        digits = max(baseDigits, perPixelRequired);
+        
+        GMPFloat.setPrecisionDigits(digits);
+        gmpOptions = determineGMPFractalOptions(cfg.multibrotExp);
+        
+        originXStr = desc.originXStr;
+        originYStr = desc.originYStr;
+        radiusStr = desc.radiusStr;
+        
+        writeln("Using ", digits, " digit precision for MPFR iteration");
+        stdout.flush();
+    }
+    
+    int loaded = 0;
 
-		if (exists(workdir ~ "/" ~ desc.filename ~ ".tmp")) {
-			writeln("-- Progress data found --");
-			auto progdata = cast(const(ubyte)[])read(workdir ~ "/" ~ desc.filename ~ ".tmp");
+    if (exists(workdir ~ "/" ~ desc.filename ~ ".tmp")) {
+        writeln("-- Progress data found --");
+        auto progdata = cast(const(ubyte)[])read(workdir ~ "/" ~ desc.filename ~ ".tmp");
         iters = decerealise!(IterResult[][])(progdata);
-			if (iters.length == desc.width) {
-				loaded = 0;
-				foreach (line; iters) {
-					if (line.length == desc.height) {
-						loaded++;
-					} else {
-						break;
-					}
-				}
-				writeln("-- Data loaded, ", loaded, " lines --");
-			} else {
+        if (iters.length == desc.width) {
+            loaded = 0;
+            foreach (line; iters) {
+                if (line.length == desc.height) {
+                    loaded++;
+                } else {
+                    break;
+                }
+            }
+            writeln("-- Data loaded, ", loaded, " lines --");
+        } else {
             iters = new IterResult[][](desc.width, desc.height);
         }
     }
     
-		const int blockSize = saveProgress * wfactor;
+    const int blockSize = saveProgress * wfactor;
     const int endp = to!int(ceil(desc.width / to!double(blockSize)));
+    int width = desc.width;
+    int height = desc.height;
     
     for (int block = 0; block < endp; block++) {
         auto blockEnd = (block + 1) * blockSize;
         auto wRange = iota(block * blockSize, min(blockEnd, desc.width));
 
-			foreach (i; parallel(wRange)) {
-            if (iters[i].length != desc.height || i >= loaded) {
-                for (int j = 0; j < desc.height; j++) {
-                    iters[i][j] = iterate(i, j, cfg);
-					}
-				} 
-				if (i % wfactor == 0) {
+        foreach (i; parallel(wRange)) {
+            if (iters[i].length != height || i >= loaded) {
+                if (useMPFR) {
+                    GMPFloat.setPrecisionDigits(digits);
+                    auto localConverter = MPFRPixelConverter(
+                        width, height,
+                        originXStr, originYStr, radiusStr
+                    );
+                    for (int j = 0; j < height; j++) {
+                        iters[i][j] = iterateMPFR(i, j, cfg, localConverter, gmpOptions);
+                    }
+                } else {
+                    for (int j = 0; j < height; j++) {
+                        iters[i][j] = iterateDouble(i, j, cfg);
+                    }
+                }
+            } 
+            if (i % wfactor == 0) {
                 write('.');
                 stdout.flush();
-				}
-			}
+            }
+        }
         write(' ');
         stdout.flush();
 
-			if (loaded >= blockEnd || desc.width <= blockEnd)
-				continue;
+        if (loaded >= blockEnd || desc.width <= blockEnd)
+            continue;
 
-			auto progdata = iters.cerealise;
-			std.file.write(workdir ~ "/" ~ desc.filename ~ ".tmp", progdata);
+        auto progdata = iters.cerealise;
+        std.file.write(workdir ~ "/" ~ desc.filename ~ ".tmp", progdata);
         write("! ");
     }
     
     if (exists(workdir ~ "/" ~ desc.filename ~ ".tmp")) {
-		remove(workdir ~ "/" ~ desc.filename ~ ".tmp");
+        remove(workdir ~ "/" ~ desc.filename ~ ".tmp");
     }
 }
 
 private void iterateBuddhabrot(ref IterResult[][] iters, const ref RenderConfig cfg,
                                const ref RenderParams desc, int wfactor) {
+    if (cfg.precisionMode == PrecisionMode.arbitrary) {
+        writeln("Warning: Buddhabrot mode requires orbit tracking which is only available");
+        writeln("  in double precision. Using double precision for Buddhabrot rendering.");
+        writeln("  For deep zooms with Buddhabrot, consider using smaller regions.");
+        stdout.flush();
+    }
+    
     auto accumulator = BuddhaAccumulator(desc.width, desc.height);
     
     auto numThreads = totalCPUs;

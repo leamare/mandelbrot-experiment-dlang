@@ -311,6 +311,22 @@ struct QuadDouble {
         
         return result;
     }
+
+    QuadDouble opBinary(string op)(const QuadDouble b) const if (op == "/") {
+        double bApprox = 1.0 / b.x[0];
+        QuadDouble y = QuadDouble(bApprox);
+        
+        auto two = QuadDouble(2.0);
+        y = y * (two - b * y);
+        y = y * (two - b * y);
+        y = y * (two - b * y);
+        
+        return this * y;
+    }
+    
+    QuadDouble opBinary(string op)(double b) const if (op == "/") {
+        return this / QuadDouble(b);
+    }
     
     int opCmp(const QuadDouble b) const {
         if (x[0] < b.x[0]) return -1;
@@ -457,14 +473,15 @@ struct QDPixelConverter {
     }
     
     QDComplex pixelToComplex(int px, int py) const {
-        double relX = (cast(double)px / minDim) * 2.0 - (1.0 + di);
-        double relY = (cast(double)py / minDim) * 2.0 - (1.0 + dr);
+        double pxCenter = cast(double)px + 0.5;
+        double pyCenter = cast(double)py + 0.5;
+        double pixelSize = 2.0 / minDim;
         
-        auto offsetX = radius * relX;
-        auto offsetY = radius * relY;
+        // cr = pxCenter * pixelSize + originX - radius * (1 + di)
+        auto cReal = originX + radius * (pxCenter * pixelSize - (1.0 + di));
         
-        auto cReal = originX + offsetX;
-        auto cImag = originY + offsetY;
+        // ci = -pyCenter * pixelSize + originY + radius * (1 + dr)
+        auto cImag = originY + radius * (-pyCenter * pixelSize + (1.0 + dr));
         
         return QDComplex(cReal, cImag);
     }

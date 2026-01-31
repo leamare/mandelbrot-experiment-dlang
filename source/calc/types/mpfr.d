@@ -492,21 +492,20 @@ struct GMPPixelConverter {
     
     void pixelToComplex(int px, int py, ref GMPComplex result) const {
         auto pxG = GMPFloat(cast(double)px + 0.5);
-        auto pyG = GMPFloat(cast(double)(height - py + 0.5));
+        auto pyG = GMPFloat(cast(double)py + 0.5);
 
+        // cr = pxG * pixelSize + originX - radius * (1 + di)
         auto termRe1 = pxG * pixelSize;
-        auto negOriginX = -originX;
         auto onePlusDi = GMPFloat(1.0 + di);
         auto radiusTimesDi = radius * onePlusDi;
-        auto termRe2 = negOriginX + radiusTimesDi;
-        auto cReal = termRe1 - termRe2;
+        auto cReal = termRe1 + originX - radiusTimesDi;
 
+        // ci = -pyG * pixelSize + originY + radius * (1 + dr)
         auto termIm1 = pyG * pixelSize;
         auto negTermIm1 = -termIm1;
         auto onePlusDr = GMPFloat(1.0 + dr);
         auto radiusTimesDr = radius * onePlusDr;
-        auto termIm2 = originY + radiusTimesDr;
-        auto cImag = negTermIm1 + termIm2;
+        auto cImag = negTermIm1 + originY + radiusTimesDr;
         
         result.re = cReal;
         result.im = cImag;
