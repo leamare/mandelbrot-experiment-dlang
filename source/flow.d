@@ -13,6 +13,8 @@ import std.parallelism;
 import std.algorithm : min, max, countUntil, map;
 import std.format : format;
 import std.process : environment;
+import core.time : Duration;
+import std.datetime.stopwatch : StopWatch, AutoStart;
 
 import cerealed;
 import dlib.image;
@@ -57,6 +59,28 @@ double digitsPerPixelForParams(const ref RenderParams desc) {
     return digitsPerPixel(desc.radius, desc.width, desc.height, desc.radiusStr);
 }
 
+string formatDuration(Duration dur) {
+    import core.time : Duration;
+    import std.format : format;
+    
+    long totalMs = dur.total!"msecs";
+    
+    if (totalMs < 1000) {
+        return format!"%d ms"(totalMs);
+    } else if (totalMs < 60_000) {
+        double secs = totalMs / 1000.0;
+        return format!"%.2f seconds"(secs);
+    } else if (totalMs < 3_600_000) {
+        long mins = totalMs / 60_000;
+        double secs = (totalMs % 60_000) / 1000.0;
+        return format!"%d min %.1f sec"(mins, secs);
+    } else {
+        long hours = totalMs / 3_600_000;
+        long mins = (totalMs % 3_600_000) / 60_000;
+        return format!"%d hr %d min"(hours, mins);
+    }
+}
+
 // =============================================================================
 // Iteration Statistics
 // =============================================================================
@@ -66,7 +90,7 @@ private void displayIterationStats(const ref IterResult[][] iters, int width, in
     int maxIter = int.min;
     long totalIter = 0;
     long pixelCount = 0;
-    long maxIterCount = 0;
+    long maxIterCount = 0;  // Pixels that hit max iterations (in set)
     
     foreach (i; 0 .. width) {
         foreach (j; 0 .. height) {
@@ -120,6 +144,7 @@ void brotFlow(RenderParams desc) {
     if (desc.x_px_offset != 0 || desc.y_px_offset != 0) {
         desc.applyPixelOffset();
         writeln("Applied pixel offset: x=", desc.x_px_offset, ", y=", desc.y_px_offset);
+        // Regenerate filename with updated coordinates
         if (desc.filename.length == 0 || desc.filename == desc.generateFileName()) {
             desc.filename = desc.generateFileName();
         }
@@ -139,12 +164,36 @@ void brotFlow(RenderParams desc) {
     writeln("Palette size: ", cfg.paletteSize, " + ", desc.paletteOffset);
     if (cfg.legacyIteration) writeln("Legacy iteration: enabled");
     writeln("Buddha: ", to!string(desc.buddha));
-    string precisionMsg = cfg.precisionMode == PrecisionMode.arbitrary ? 
-            "GMP Arbitrary Precision" : "Standard";
+    string precisionMsg;
+    final switch (cfg.precisionMode) {
+        case PrecisionMode.standard:
+            precisionMsg = "Standard (double, ~15 digits)";
+            break;
+        case PrecisionMode.quaddouble:
+            precisionMsg = "QuadDouble (~62 digits)";
+            break;
+        case PrecisionMode.arbitrary:
+            precisionMsg = "MPFR Arbitrary Precision";
+            break;
+    }
+
     if (desc.forcePrecision.length > 0) {
         precisionMsg ~= " (forced: " ~ desc.forcePrecision ~ ")";
     }
+
+    if (desc.perturbations.length > 0 && desc.perturbations != "auto") {
+        precisionMsg ~= ", perturbations: " ~ desc.perturbations;
+    }
+
     writeln("Precision: ", precisionMsg);
+    string paletteInfo = to!string(desc.colorfunc);
+    if (cfg.paletteFile.length > 0) {
+        paletteInfo = cfg.paletteFile;
+    }
+    if (desc.paletteReverse) {
+        paletteInfo ~= " (reversed)";
+    }
+    writeln("Palette: ", paletteInfo);
     writeln("Filename: ", desc.filename);
     stdout.flush();
 
@@ -152,6 +201,8 @@ void brotFlow(RenderParams desc) {
 
 	writeln("\nIterating");
     stdout.flush();
+
+    auto computeTimer = StopWatch(AutoStart.yes);
 
     BuddhaResult buddhaResult;
 
@@ -163,7 +214,13 @@ void brotFlow(RenderParams desc) {
         iterateAll(iters, cfg, desc, true, null);
     }
     
+    computeTimer.stop();
+    auto computeTime = computeTimer.peek();
+    
     displayIterationStats(iters, desc.width, desc.height, cfg.maxIterations);
+    
+    writeln("\nComputation time: ", formatDuration(computeTime));
+    stdout.flush();
     
     if (desc.buddha != BuddhaMode.none && buddhaResult.maxHits > 0) {
         SuperImage buddhaImg = image(desc.width, desc.height);
@@ -220,7 +277,7 @@ void brotFlow(RenderParams desc) {
         
         write("Progress: 0%");
         stdout.flush();
-        
+    
         auto wRange = iota(0, desc.width);
         foreach (i; parallel(wRange)) {
             for (int j = 0; j < desc.height; j++) {
@@ -244,8 +301,13 @@ void brotFlow(RenderParams desc) {
     
     writeln("Saving: " ~ workdir ~ "/" ~ desc.filename ~ ".png");
     stdout.flush();
-    savePNG(img, workdir ~ "/" ~ desc.filename ~ ".png");
     
+    auto saveTimer = StopWatch(AutoStart.yes);
+    savePNG(img, workdir ~ "/" ~ desc.filename ~ ".png");
+    saveTimer.stop();
+    auto saveTime = saveTimer.peek();
+    
+    writeln("Save time: ", formatDuration(saveTime));
     writeln("--------------------\n");
     stdout.flush();
 }

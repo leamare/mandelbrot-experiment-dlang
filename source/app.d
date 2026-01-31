@@ -138,22 +138,22 @@ int main(string[] args) {
         }
 
         if (jsonList.type == JSONType.object) {
-            queue ~= createBrotDesc();
+            queue ~= createBrotDesc(jsonList);
         } else {
             foreach (obj; jsonList.array) {
                 // Handle animation sequences
                 if ("animate" in obj && obj["animate"].integer && "from" in obj && "to" in obj) {
-                    generateAnimateSequence(queue, obj);
+                    generateAnimateSequence(queue, obj, flow.workdir);
                     continue;
                 }
 
                 // Handle chunked rendering
                 if ("chunks" in obj && obj["chunks"].integer) {
-                    generateChunksSequence(queue, obj);
+                    generateChunksSequence(queue, obj, flow.workdir);
                     continue;
                 }
                 
-                queue ~= createBrotDesc();
+                queue ~= createBrotDesc(obj);
             }
         }
     } else {
