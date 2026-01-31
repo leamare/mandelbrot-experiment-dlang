@@ -34,21 +34,15 @@ It's not ready to handle unreasonable JSON values and cli args, so be careful wi
   - **NOTE:** Only one of -b and -n can be active at a time (-b has priority)
   - `-t | --type` - Fractal type (mandelbrot, multibrot, ship, mandelbar), **mandelbrot** by default
   - `-e | --exponent` - Multibrot exponent, **2.0** by default
+  - `-v | --legacyiteration` - Legacy iteration mode (old-style negative exponent multibrot + inverted coloring), **false** by default
+  - `-q | --escaperadius` - Escape radius threshold (|z|² > escapeRadius²), **4.0** by default
 - Coloring
   - `-p | --palettesize` - Palette size, Dwell number by default
-  - `-c | --colorfunc` - Coloring function, **ultrafrac** by default
-    Possible coloring functions are:
-      * ultrafrac
-      * hsv
-      * gray
-      * blue
-      * red
-      * oceanid
-      * fire
-      * seashore
-      * cnfsso
-      * acid
-      * softhours
+  - `-c | --colorfunc` - Color palette or function, **ultrafrac** by default
+    Can be a built-in name or a custom palette filename (without .json):
+      * Built-in algorithmic: hsv, gray, blue, red, base
+      * Built-in palettes (from palettes/): ultrafrac, seashore, fire, oceanid, cnfsso, acid, softhours
+      * Custom palette: any filename in palettes/ directory (e.g., "mypalette" loads "palettes/mypalette.json")
 - Additional helpers
   - `-o | --output` - Output filename, generated based on parameters by default
   - `-d | --dir` - Output directory, `out` by default (created if does not exists)
@@ -89,13 +83,23 @@ Example of a JSON file with one fully described job:
     // dwell and palette size
     "dwell": 2500,
     "palette": 350,
-    // palette offset, float 0-1, percentage tby which palette should be shifted
+    // palette offset, float 0-1, percentage by which palette should be shifted
     // only works with gradient-based palettes
     "paletteOffset": 0.5,
     // type: string with value "mandelbrot", "multibrot", "mandelbar" or "ship"
     "type": "mandelbrot",
     // multibrot power
     "multibrotExp": 2.0,
+    // legacyIteration: boolean, legacy iteration mode (matches old code behavior)
+    //   When true:
+    //     - Uses old-style negative exponent multibrot iteration
+    //     - Inverts coloring: points in set get colored, escaping points are black
+    //   This creates a gradient background effect instead of pure black background
+    //   Works for all fractal types, false by default
+    "legacyIteration": false,
+    // escapeRadius: float, escape radius threshold (|z|² > escapeRadius²), 4.0 by default
+    //   Lower values detect escape earlier, higher values allow deeper exploration
+    "escapeRadius": 4.0,
     // colorfunc: string, value is one of the color function list from cli args
     "colorfunc": "cnfsso",
     // buddha and antibuddha, same rules as in cli
@@ -106,18 +110,20 @@ Example of a JSON file with one fully described job:
     
     // Precision control parameters
     // precision: string, controls precision mode
-    //   Values: "auto", "double", "bigfloat", "gmp", "bigint", "standard", "arbitrary"
+    //   Values: "auto", "double", "quaddouble", "mpfr"
     //   "auto" (default): Automatically selects based on zoom depth
     //   "double" or "standard": Standard double precision (~15 decimal digits) - FASTEST
-    //   "bigfloat": Double-double precision (~31 decimal digits) - FAST
-    //   "gmp" or "arbitrary": GMP arbitrary precision (unlimited) - MEDIUM speed
-    //   "bigint": Legacy BigInt mode (currently an alias for GMP)
+    //   "quaddouble" or "qd": Quad-double precision (~60 decimal digits) - FAST
+    //   "mpfr" or "gmp": MPFR arbitrary precision (unlimited) - MEDIUM speed
     "precision": "auto",
     
-    // arbitrary_precision_method: string, selects which arbitrary precision to use in auto mode
-    //   Only used when precision is "auto" and very high precision (>100 digits) is needed
-    //   Values: "gmp" (default, faster) or "bigint" (legacy alias for GMP)
-    "arbitrary_precision_method": "gmp",
+    // Perturbation mode - controls use of perturbation theory for optimization
+    // perturbations: string, controls perturbation optimization
+    //   Values: "auto" (default), "enabled", "disabled"
+    //   "auto": Use perturbation when beneficial (high iterations + deep zoom on Mandelbrot)
+    //   "enabled": Always use perturbation when supported (Mandelbrot only)
+    //   "disabled": Never use perturbation, always use direct iteration
+    "perturbations": "auto",
     
     // Pixel offset parameters (shift viewport center)
     // x_px_offset: integer, number of pixels to offset center horizontally
@@ -128,29 +134,25 @@ Example of a JSON file with one fully described job:
     "x_px_offset": 0,
     "y_px_offset": 0,
     
-    // Palette customization
-    // paletteFile or palette_file: string, filename of external palette JSON file
-    //   Palette files should be placed in the "palettes/" directory
-    //   Supports RGB (0-255) or fraction (0-1) color definitions
-    //   Optional "position" field (0-1) for non-uniform color distribution
-    //   Example: "example.json" or "my_palette.json"
-    "paletteFile": "",
+    // Palette options
     // palette_reverse: boolean, reverses the color palette order
-    //   Works with both external palettes and built-in palettes (ultrafrac, hsv, gray, etc.)
+    //   Works with both external palettes and built-in palettes
     "palette_reverse": false,
+    // NOTE: Custom palettes are now specified via "colorfunc" parameter:
+    //   Use "colorfunc": "mypalette" to load "palettes/mypalette.json"
   },
 ]
 ```
 
 It's possible to describe two kinds of special jobs: animation and chunked image.
 
-For anination you need to describe a job as follows:
+For animation you need to describe a job as follows:
 
 ```json
 {
   // number of frames
   "animate": 420,
-  // Object describing a srarting point job
+  // Object describing a starting point job
   // non-animatable properties are copied from it
   "from": {...},
   // ending point job
