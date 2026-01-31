@@ -101,9 +101,7 @@ BuddhaResult iterateBuddhabrot(
                 
                 if (shouldAccumulate) {
                     foreach (point; orbitResult.orbit) {
-                        double re = to!double(point[0]);
-                        double im = to!double(point[1]);
-                        auto pixel = complexToPixel(re, im, cfg);
+                        auto pixel = localConverter.complexToPixel(point[0], point[1]);
                         int px = pixel[0];
                         int py = pixel[1];
                         if (px >= 0 && px < width && py >= 0 && py < height) {

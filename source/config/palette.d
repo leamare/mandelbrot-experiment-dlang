@@ -35,6 +35,14 @@ struct PalettePoint {
 }
 
 Color4f[] loadPaletteFromFile(string filename) {
+    return loadPaletteImpl(filename, false);
+}
+
+Color4f[] loadPaletteFromFileSilent(string filename) {
+    return loadPaletteImpl(filename, true);
+}
+
+private Color4f[] loadPaletteImpl(string filename, bool silent) {
     string paletteDir = "palettes";
     string filePath = buildPath(paletteDir, filename);
     
@@ -168,14 +176,12 @@ Color4f[] loadPaletteFromFile(string filename) {
             }
         }
         
-        string formatName = format == PaletteFormat.rgb ? "RGB" : 
-                           format == PaletteFormat.float_ ? "float" : "auto";
-        writeln("Loaded palette from '", filePath, "' (", formatName, " format) with ", palette.length, " colors");
-        stdout.flush();
         return palette;
         
     } catch (Exception e) {
-        writeln("ERROR: Failed to load palette from '", filePath, "': ", e.msg);
+        if (!silent) {
+            writeln("ERROR: Failed to load palette from '", filePath, "': ", e.msg);
+        }
         return null;
     }
 }
@@ -200,3 +206,9 @@ Color4f[] reversePalette(Color4f[] palette) {
     return reversed;
 }
 
+bool paletteFileExists(string filename) {
+    import std.file : exists;
+    string paletteDir = "palettes";
+    string filePath = buildPath(paletteDir, filename);
+    return exists(filePath);
+}

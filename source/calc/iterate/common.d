@@ -8,14 +8,14 @@ import types.render;
 
 struct IterParams {
     uint maxIterations = 100;
-    double escapeRadius2 = 4.0;
+    double escapeRadius2 = 65536.0;
     FractalType fractalType = FractalType.mandelbrot;
     float multibrotExp = 2.0;
     
     static IterParams fromConfig(const ref RenderConfig cfg) {
         IterParams p;
         p.maxIterations = cfg.maxIterations;
-        p.escapeRadius2 = cfg.escapeRadius * cfg.escapeRadius;
+        p.escapeRadius2 = 65536.0;
         p.fractalType = cfg.fractalType;
         p.multibrotExp = cfg.multibrotExp;
         return p;

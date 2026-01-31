@@ -15,6 +15,7 @@ enum BuddhaMode {
 
 enum PrecisionMode {
     standard,
+    quaddouble,
     arbitrary
 }
 

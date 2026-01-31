@@ -82,24 +82,32 @@ struct RenderParams {
             string mode = forcePrecision.toLower().strip();
             if (mode == "standard" || mode == "double") {
                 return PrecisionMode.standard;
-            } else if (mode == "arbitrary" || mode == "gmp" || mode == "mpfr" || 
-                       mode == "quaddouble" || mode == "bigfloat") {
+            } else if (mode == "quaddouble" || mode == "quad" || mode == "qd" || 
+                       mode == "bigfloat" || mode == "dd" || mode == "doubledouble" || mode == "multidouble") {
+                return PrecisionMode.quaddouble;
+            } else if (mode == "arbitrary" || mode == "gmp" || mode == "mpfr") {
                 return PrecisionMode.arbitrary;
             }
         }
         
         if (arbitraryPrecisionMethod.length > 0) {
             auto method = parsePrecisionMethod(arbitraryPrecisionMethod);
-            if (method != PrecisionMethod.auto_ && method != PrecisionMethod.double_) {
+            if (method == PrecisionMethod.quaddouble) {
+                return PrecisionMode.quaddouble;
+            } else if (method == PrecisionMethod.mpfr) {
+                return PrecisionMode.arbitrary;
+            } else if (method != PrecisionMethod.auto_ && method != PrecisionMethod.double_) {
                 return PrecisionMode.arbitrary;
             }
         }
         
         uint digits = combinedPrecisionDigits(originXStr, originYStr, radiusStr, radius);
         
-        import precision.constants : PRECISION_THRESHOLD_DOUBLE;
-        if (digits > PRECISION_THRESHOLD_DOUBLE) {
+        import precision.constants : PRECISION_THRESHOLD_DOUBLE, PRECISION_THRESHOLD_QUADDOUBLE;
+        if (digits > PRECISION_THRESHOLD_QUADDOUBLE) {
             return PrecisionMode.arbitrary;
+        } else if (digits > PRECISION_THRESHOLD_DOUBLE) {
+            return PrecisionMode.quaddouble;
         }
         
         return PrecisionMode.standard;

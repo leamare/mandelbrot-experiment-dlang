@@ -66,6 +66,29 @@ struct MPFRPixelConverter {
         result.re = cReal;
         result.im = cImag;
     }
+
+    import std.typecons : Tuple;
+    alias Coord = Tuple!(int, int);
+    
+    Coord complexToPixel(string crStr, string ciStr) const {
+        import std.math : round;
+        
+        auto cr = GMPFloat(crStr);
+        auto ci = GMPFloat(ciStr);
+        
+        auto onePlusDi = GMPFloat(1.0 + di);
+        auto term1 = cr - originX + radius * onePlusDi;
+        auto pxF = term1 / pixelSize;
+        
+        auto onePlusDr = GMPFloat(1.0 + dr);
+        auto term2 = originY + radius * onePlusDr - ci;
+        auto pyF = term2 / pixelSize;
+        
+        int px = cast(int)round(pxF.toDouble());
+        int py = cast(int)round(pyF.toDouble());
+        
+        return Coord(px, py);
+    }
     
     void getCenter(ref GMPComplex result) const {
         result.re = GMPFloat(originX.toString());
@@ -396,12 +419,12 @@ MPFROrbitResult iterateMPFRWithOrbit(
                 break;
             }
             
-            result.orbit ~= [z.re.toString(), z.im.toString()];
-            
             auto newRe = zrSq - ziSq + c.re;
             auto newIm = z.re * z.im * GMPFloat(2.0) + c.im;
             z.re = newRe;
             z.im = newIm;
+
+            result.orbit ~= [z.re.toString(), z.im.toString()];
         }
     }
     else if (cfg.fractalType == FractalType.ship) {
@@ -414,8 +437,6 @@ MPFROrbitResult iterateMPFRWithOrbit(
                 break;
             }
             
-            result.orbit ~= [z.re.toString(), z.im.toString()];
-            
             auto absRe = z.re;
             auto absIm = z.im;
             if (absRe.toDouble() < 0) absRe = -absRe;
@@ -425,6 +446,8 @@ MPFROrbitResult iterateMPFRWithOrbit(
             auto newIm = absRe * absIm * GMPFloat(2.0) + c.im;
             z.re = newRe;
             z.im = newIm;
+
+            result.orbit ~= [z.re.toString(), z.im.toString()];
         }
     }
     else if (cfg.fractalType == FractalType.mandelbar) {
@@ -437,13 +460,13 @@ MPFROrbitResult iterateMPFRWithOrbit(
                 break;
             }
             
-            result.orbit ~= [z.re.toString(), z.im.toString()];
-            
             auto conjIm = -z.im;
             auto newRe = zrSq - ziSq + c.re;
             auto newIm = z.re * conjIm * GMPFloat(2.0) + c.im;
             z.re = newRe;
             z.im = newIm;
+
+            result.orbit ~= [z.re.toString(), z.im.toString()];
         }
     }
     else if (cfg.fractalType == FractalType.multibrot) {
@@ -457,8 +480,6 @@ MPFROrbitResult iterateMPFRWithOrbit(
             if (magSq.toDouble() > escapeThreshold.toDouble()) {
                 break;
             }
-            
-            result.orbit ~= [z.re.toString(), z.im.toString()];
             
             if (options.hasIntegerPower && options.integerPower >= 0) {
                 z.powAndAdd(options.integerPower, c);
@@ -493,6 +514,8 @@ MPFROrbitResult iterateMPFRWithOrbit(
                     z.im = GMPFloat(newMag * sin(newTheta)) + c.im;
                 }
             }
+
+            result.orbit ~= [z.re.toString(), z.im.toString()];
         }
     }
     else {
@@ -505,12 +528,12 @@ MPFROrbitResult iterateMPFRWithOrbit(
                 break;
             }
             
-            result.orbit ~= [z.re.toString(), z.im.toString()];
-            
             auto newRe = zrSq - ziSq + c.re;
             auto newIm = z.re * z.im * GMPFloat(2.0) + c.im;
             z.re = newRe;
             z.im = newIm;
+
+            result.orbit ~= [z.re.toString(), z.im.toString()];
         }
     }
     

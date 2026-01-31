@@ -77,24 +77,64 @@ RenderParams createBrotDesc(JSONValue s) {
         ret.height = 16 * getJsonInt(s["amp"]);
     }
     
+    bool usedBoxCoords = false;
     if ("x1" in s && "x2" in s && "y1" in s && "y2" in s) {
-        const auto x = (getJsonNumber(s["x1"]) + getJsonNumber(s["x2"])) / 2;
-        const auto y = (getJsonNumber(s["y1"]) + getJsonNumber(s["y2"])) / 2;
-        const auto radX = max(getJsonNumber(s["x1"]), getJsonNumber(s["x2"])) - 
-                         min(getJsonNumber(s["x1"]), getJsonNumber(s["x2"]));
-        const auto radY = max(getJsonNumber(s["y1"]), getJsonNumber(s["y2"])) - 
-                         min(getJsonNumber(s["y1"]), getJsonNumber(s["y2"]));
+        usedBoxCoords = true;
+        
+        auto getCoordValue(JSONValue v) {
+            if (v.type == JSONType.string) {
+                return to!real(v.str);
+            } else {
+                return getJsonNumber(v);
+            }
+        }
+        
+        auto getCoordStr(JSONValue v) {
+            if (v.type == JSONType.string) {
+                return v.str;
+            } else {
+                return format!"%.20g"(getJsonNumber(v));
+            }
+        }
+        
+        const auto x1Val = getCoordValue(s["x1"]);
+        const auto x2Val = getCoordValue(s["x2"]);
+        const auto y1Val = getCoordValue(s["y1"]);
+        const auto y2Val = getCoordValue(s["y2"]);
+        
+        const auto x = (x1Val + x2Val) / 2;
+        const auto y = (y1Val + y2Val) / 2;
+        const auto radX = max(x1Val, x2Val) - min(x1Val, x2Val);
+        const auto radY = max(y1Val, y2Val) - min(y1Val, y2Val);
 
         ret.originX = x;
         ret.originY = y;
         ret.radius = max(radX, radY);
         
-        ret.originXStr = format!"%.20g"(x);
-        ret.originYStr = format!"%.20g"(y);
-        ret.radiusStr = format!"%.20g"(ret.radius);
+        if (s["x1"].type == JSONType.string || s["x2"].type == JSONType.string) {
+            import calc.types.mpfr : GMPFloat;
+            GMPFloat.setPrecisionDigits(100);
+            auto x1GMP = GMPFloat(getCoordStr(s["x1"]));
+            auto x2GMP = GMPFloat(getCoordStr(s["x2"]));
+            auto y1GMP = GMPFloat(getCoordStr(s["y1"]));
+            auto y2GMP = GMPFloat(getCoordStr(s["y2"]));
+            auto centerX = (x1GMP + x2GMP) / GMPFloat(2.0);
+            auto centerY = (y1GMP + y2GMP) / GMPFloat(2.0);
+            ret.originXStr = centerX.toString();
+            ret.originYStr = centerY.toString();
+            
+            auto radXGMP = (x1GMP > x2GMP ? x1GMP - x2GMP : x2GMP - x1GMP);
+            auto radYGMP = (y1GMP > y2GMP ? y1GMP - y2GMP : y2GMP - y1GMP);
+            auto radiusGMP = radXGMP > radYGMP ? radXGMP : radYGMP;
+            ret.radiusStr = radiusGMP.toString();
+        } else {
+            ret.originXStr = format!"%.20g"(x);
+            ret.originYStr = format!"%.20g"(y);
+            ret.radiusStr = format!"%.20g"(ret.radius);
+        }
     }
 
-    if ("x" in s) {
+    if (!usedBoxCoords && "x" in s) {
         if (s["x"].type == JSONType.string) {
             ret.originXStr = s["x"].str;
             try { ret.originX = to!real(s["x"].str); } catch (Exception) {}
@@ -103,7 +143,7 @@ RenderParams createBrotDesc(JSONValue s) {
             ret.originXStr = format!"%.20g"(ret.originX);
         }
     }
-    if ("y" in s) {
+    if (!usedBoxCoords && "y" in s) {
         if (s["y"].type == JSONType.string) {
             ret.originYStr = s["y"].str;
             try { ret.originY = to!real(s["y"].str); } catch (Exception) {}
@@ -112,7 +152,7 @@ RenderParams createBrotDesc(JSONValue s) {
             ret.originYStr = format!"%.20g"(ret.originY);
         }
     }
-    if ("radius" in s) {
+    if (!usedBoxCoords && "radius" in s) {
         if (s["radius"].type == JSONType.string) {
             ret.radiusStr = s["radius"].str;
             try { ret.radius = to!real(s["radius"].str); } catch (Exception) {}
