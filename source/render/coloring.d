@@ -3,7 +3,7 @@
  */
 module render.coloring;
 
-import std.math : log, sqrt, floor, sin, PI;
+import std.math : log, sqrt, floor, sin, PI, isNaN, isInfinity;
 import dlib.image.color;
 import dlib.image.hsv : hsv;
 
@@ -80,23 +80,41 @@ Color4f computeColorWithPalette(
     const ref RenderConfig cfg,
     const Color4f[] externalPalette
 ) {
-    bool isInSet = result.iterations >= cfg.maxIterations;
-    bool shouldInvert = cfg.legacyIteration;
+    bool useLegacyMultibrotColoring = cfg.legacyIteration;
     
-    if (isInSet) {
+    bool isInSet = result.iterations >= cfg.maxIterations;
+    
+    if (isInSet && !useLegacyMultibrotColoring) {
         return Color4f(0, 0, 0);
     }
 
     double smoothed = result.smoothed;
+    int iter = result.iterations;
     
-    smoothed += cfg.paletteOffset * cfg.paletteSize;
+    if (useLegacyMultibrotColoring) {
+        iter = cfg.maxIterations - result.iterations;
+        
+        double nu = cast(double)result.iterations + 1.0 - result.smoothed;
+        
+        if (iter < cfg.maxIterations) {
+            smoothed = 1.0 + cast(double)iter - nu;
+        } else {
+            smoothed = cast(double)result.iterations;
+        }
+        
+        smoothed += cfg.paletteOffset * cfg.paletteSize;
+        smoothed = smoothed - floor(smoothed / cfg.maxIterations) * cfg.maxIterations;
+        if (smoothed < 0) smoothed += cfg.maxIterations;
+    } else {
+        smoothed += cfg.paletteOffset * cfg.paletteSize;
+    }
     
     Color4f[] palette;
     PaletteMetadata metadata;
     bool hasMetadata = false;
     
     if (externalPalette !is null && externalPalette.length > 0) {
-        palette = externalPalette.dup;  // Make mutable copy
+        palette = externalPalette.dup;
     } else {
         string paletteFile = colorFuncToFilename(cfg.colorFunc);
         PaletteInfo* info = getCachedPaletteInfo(paletteFile, cfg.paletteReverse);
@@ -108,7 +126,11 @@ Color4f computeColorWithPalette(
     }
     
     if (palette !is null && palette.length > 0) {
-        return interpolatePalette(smoothed, palette, cfg.paletteSize, cfg.paletteReverse);
+        if (useLegacyMultibrotColoring) {
+            return interpolatePaletteLegacy(smoothed, iter, palette, cfg.paletteSize, cfg.maxIterations, cfg.paletteReverse);
+        } else {
+            return interpolatePalette(smoothed, palette, cfg.paletteSize, cfg.paletteSize, cfg.paletteReverse);
+        }
     }
     
     final switch (cfg.colorFunc) {
@@ -133,33 +155,66 @@ Color4f computeColorWithPalette(
     }
 }
 
-private Color4f interpolatePalette(double value, const Color4f[] palette, uint paletteSize, bool reverse) {
+private Color4f interpolatePalette(double value, const Color4f[] palette, uint paletteSize, uint wrapValue, bool reverse) {
+    import std.math : floor, abs;
+    
     if (palette.length == 0) return Color4f(0, 0, 0);
     if (palette.length == 1) return palette[0];
     
     double t = value;
     if (reverse) t = -t;
     
-    t = t - floor(t / paletteSize) * paletteSize;
-    if (t < 0) t += paletteSize;
+    double paletteBlock = cast(double)paletteSize / palette.length;
     
-    double palettePos = (t / paletteSize) * palette.length;
+    double absT = abs(t);
+    size_t idx = cast(size_t)(floor(absT / paletteBlock)) % palette.length;
     
-    size_t idx = cast(size_t)floor(palettePos);
-    double frac = palettePos - idx;
+    double frac = (absT % paletteBlock) / paletteBlock;
     
-    if (idx >= palette.length - 1) {
-        idx = palette.length - 2;
-        frac = 1.0;
-    }
+    size_t idx2 = (idx + 1) % palette.length;
     
     auto c1 = palette[idx];
-    auto c2 = palette[idx + 1];
+    auto c2 = palette[idx2];
     
     return Color4f(
         c1.r + (c2.r - c1.r) * cast(float)frac,
         c1.g + (c2.g - c1.g) * cast(float)frac,
         c1.b + (c2.b - c1.b) * cast(float)frac
+    );
+}
+
+private Color4f interpolatePaletteLegacy(double iter_d, int iter, const Color4f[] palette, 
+                                          uint paletteSize, uint maxIterations, bool reverse) {
+    import std.math : floor, abs;
+    import std.algorithm : min;
+    
+    if (palette.length == 0) return Color4f(0, 0, 0);
+    if (palette.length == 1) return palette[0];
+    
+    double t = iter_d;
+    if (reverse) t = cast(double)maxIterations - t;
+    
+    double paletteBlock = cast(double)paletteSize / palette.length;
+    
+    size_t c1 = cast(size_t)(floor(abs(t) / paletteBlock)) % palette.length;
+    
+    size_t c2;
+    if (iter + paletteBlock >= maxIterations) {
+        c2 = min(4, palette.length - 1);
+    } else {
+        c2 = (c1 + 1) % palette.length;
+    }
+    
+    double vd = (t % paletteBlock) / paletteBlock;
+    if (vd < 0) vd += 1.0;
+    
+    auto color1 = palette[c1];
+    auto color2 = palette[c2];
+    
+    return Color4f(
+        color1.r + (color2.r - color1.r) * cast(float)vd,
+        color1.g + (color2.g - color1.g) * cast(float)vd,
+        color1.b + (color2.b - color1.b) * cast(float)vd
     );
 }
 

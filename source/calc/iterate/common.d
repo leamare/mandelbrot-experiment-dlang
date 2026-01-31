@@ -24,12 +24,12 @@ struct IterParams {
     }
 }
 
-double smoothIterations(int iter, double mag2, uint maxIterations) {
-    if (iter >= maxIterations) {
+double smoothIterations(int iter, double mag2, uint maxIterations, bool legacyMode = false) {
+    if (!legacyMode && iter >= maxIterations) {
         return cast(double)maxIterations;
     }
     
-    if (mag2 <= 1.0) {
+    if (!legacyMode && mag2 <= 1.0) {
         return cast(double)iter;
     }
     

@@ -135,7 +135,9 @@ void brotFlow(RenderParams desc) {
             (desc.originY < 0 ? " - " : " + "), 
             desc.originYStr.length > 40 ? desc.originYStr[0..40] ~ "..." : format!"%.17g"(abs(desc.originY)), "i");
     writeln("Viewpoint radius: ", desc.radiusStr);
+    writeln("Escape radius: ", cfg.escapeRadius);
     writeln("Palette size: ", cfg.paletteSize, " + ", desc.paletteOffset);
+    if (cfg.legacyIteration) writeln("Legacy iteration: enabled");
     writeln("Buddha: ", to!string(desc.buddha));
     string precisionMsg = cfg.precisionMode == PrecisionMode.arbitrary ? 
             "GMP Arbitrary Precision" : "Standard";

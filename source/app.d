@@ -50,6 +50,8 @@ int main(string[] args) {
         "buddha|b", "Calculate Buddhabrot, False by default", &buddha,
         "antibuddha|n", "Calculate Antibuddhabrot, False by default, disabled if -b", &antibuddha,
         "palettesize|p", "Palette scale, MAX_ITER by default", &cli.palette,
+        "paletteoffset|l", "Palette offset (0.0-1.0), shifts colors in the palette", &cli.paletteOffset,
+        "palettereverse|g", "Reverse palette color direction", &cli.paletteReverse,
         "output|o", "Output filename, generated based on parameters by default", &filename,
         "dir|d", "Output directory, `out` by default (created if does not exist)", &flow.workdir,
         "type|t", "Fractal type (mandelbrot, multibrot, ship, mandelbar), mandelbrot by default", &cli.fractalType,
@@ -170,6 +172,60 @@ int main(string[] args) {
         if (legacyIteration) cli.legacyIteration = true;
 
         queue ~= cli;
+    }
+
+    if (legacyIteration) {
+        foreach (ref item; queue) {
+            item.legacyIteration = true;
+        }
+    }
+    
+    if (colorFuncArg.length > 0) {
+        foreach (ref item; queue) {
+            ColorFunc parsedFunc;
+            bool isBuiltin = false;
+            
+            auto cfStr = colorFuncArg.toLower;
+            switch (cfStr) {
+                case "hsv": parsedFunc = ColorFunc.hsv; isBuiltin = true; break;
+                case "gray": case "grey": parsedFunc = ColorFunc.gray; isBuiltin = true; break;
+                case "blue": parsedFunc = ColorFunc.blue; isBuiltin = true; break;
+                case "red": parsedFunc = ColorFunc.red; isBuiltin = true; break;
+                case "base": parsedFunc = ColorFunc.base; isBuiltin = true; break;
+                case "ultrafrac": parsedFunc = ColorFunc.ultrafrac; isBuiltin = true; break;
+                case "seashore": parsedFunc = ColorFunc.seashore; isBuiltin = true; break;
+                case "fire": parsedFunc = ColorFunc.fire; isBuiltin = true; break;
+                case "oceanid": parsedFunc = ColorFunc.oceanid; isBuiltin = true; break;
+                case "cnfsso": parsedFunc = ColorFunc.cnfsso; isBuiltin = true; break;
+                case "acid": parsedFunc = ColorFunc.acid; isBuiltin = true; break;
+                case "softhours": parsedFunc = ColorFunc.softhours; isBuiltin = true; break;
+                default:
+                    item.colorfunc = ColorFunc.ultrafrac;
+                    if (cfStr.length > 5 && cfStr[$-5..$] == ".json") {
+                        item.paletteFile = cfStr;
+                    } else {
+                        item.paletteFile = cfStr ~ ".json";
+                    }
+                    break;
+            }
+            
+            if (isBuiltin) {
+                item.colorfunc = parsedFunc;
+                item.paletteFile = "";
+            }
+        }
+    }
+    
+    if (cli.paletteOffset != 0.0) {
+        foreach (ref item; queue) {
+            item.paletteOffset = cli.paletteOffset;
+        }
+    }
+    
+    if (cli.paletteReverse) {
+        foreach (ref item; queue) {
+            item.paletteReverse = true;
+        }
     }
 
     if (!flow.workdir.exists) flow.workdir.mkdir;

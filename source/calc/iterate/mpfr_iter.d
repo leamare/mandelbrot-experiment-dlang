@@ -154,7 +154,7 @@ IterResult iterateMPFRComplex(
     }
     
     double mag2 = z.magnitudeSquaredDouble();
-    double smoothed = smoothIterations(iter, mag2, params.maxIterations);
+    double smoothed = smoothIterations(iter, mag2, params.maxIterations, params.legacyIteration);
     return IterResult(iter, smoothed);
 }
 

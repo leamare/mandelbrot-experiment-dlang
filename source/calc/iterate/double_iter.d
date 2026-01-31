@@ -86,7 +86,7 @@ IterResult iterateDoubleComplex(double cx, double cy, IterParams params) {
         iter++;
     }
     
-    double smoothed = smoothIterations(iter, zx2 + zy2, params.maxIterations);
+    double smoothed = smoothIterations(iter, zx2 + zy2, params.maxIterations, params.legacyIteration);
     return IterResult(iter, smoothed);
 }
 
@@ -236,7 +236,7 @@ OrbitResult iterateWithOrbit(int px, int py, const ref RenderConfig cfg) {
         result.orbit ~= ComplexD(zx, zy);
     }
     
-    double smoothed = smoothIterations(iter, zx2 + zy2, params.maxIterations);
+    double smoothed = smoothIterations(iter, zx2 + zy2, params.maxIterations, params.legacyIteration);
     result.iter = IterResult(iter, smoothed);
     return result;
 }
