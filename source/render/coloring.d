@@ -11,8 +11,71 @@ import types.fractal;
 import types.iter_result;
 import types.render;
 import config.palette;
+import std.conv : to;
+
+private __gshared Color4f[][string] _loadedPaletteCache;
+private __gshared Object _paletteCacheLock;
+
+shared static this() {
+    _paletteCacheLock = new Object();
+}
+
+private string colorFuncToFilename(ColorFunc cf) {
+    final switch (cf) {
+        case ColorFunc.ultrafrac: return "ultrafrac.json";
+        case ColorFunc.seashore: return "seashore.json";
+        case ColorFunc.fire: return "fire.json";
+        case ColorFunc.oceanid: return "oceanid.json";
+        case ColorFunc.cnfsso: return "cnfsso.json";
+        case ColorFunc.acid: return "acid.json";
+        case ColorFunc.softhours: return "softhours.json";
+        // Built-in algorithmic functions have no palette files
+        case ColorFunc.hsv: return "";
+        case ColorFunc.gray: return "";
+        case ColorFunc.blue: return "";
+        case ColorFunc.red: return "";
+        case ColorFunc.base: return "";
+    }
+}
+
+private Color4f[] getCachedPalette(string paletteFile, bool reverse) {
+    if (paletteFile.length == 0) return null;
+    
+    string cacheKey = paletteFile ~ (reverse ? ":r" : ":n");
+    
+    synchronized (_paletteCacheLock) {
+        if (cacheKey in _loadedPaletteCache) {
+            return _loadedPaletteCache[cacheKey];
+        }
+        
+        Color4f[] palette = loadPaletteFromFile(paletteFile);
+        if (palette !is null && reverse) {
+            palette = reversePalette(palette);
+        }
+        
+        _loadedPaletteCache[cacheKey] = palette;
+        return palette;
+    }
+}
 
 Color4f computeColor(const ref IterResult result, const ref RenderConfig cfg) {
+    
+    string paletteFile;
+    
+    if (cfg.paletteFile.length > 0) {
+        paletteFile = cfg.paletteFile;
+    } else {
+        paletteFile = colorFuncToFilename(cfg.colorFunc);
+    }
+    
+    if (paletteFile.length > 0) {
+        Color4f[] palette = getCachedPalette(paletteFile, cfg.paletteReverse);
+        
+        if (palette !is null && palette.length > 0) {
+            return computeColorWithPalette(result, cfg, palette);
+        }
+    }
+    
     return computeColorWithPalette(result, cfg, null);
 }
 

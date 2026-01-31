@@ -1,3 +1,16 @@
+/**
+ * Palette Loader
+ * 
+ * JSON Format:
+ * {
+ *   "format": "rgb" or "float",  // Optional: "rgb" for 0-255, "float" for 0-1
+ *   "colors": [                   // Or just an array at root level
+ *     {"r": 255, "g": 0, "b": 0},
+ *     ...
+ *   ]
+ * }
+ */
+
 module config.palette;
 
 import std.stdio;
@@ -9,6 +22,12 @@ import std.path;
 import std.algorithm;
 import std.math;
 import dlib.image.color;
+
+enum PaletteFormat {
+    auto_,
+    rgb,
+    float_
+}
 
 struct PalettePoint {
     float r, g, b;
@@ -27,8 +46,31 @@ Color4f[] loadPaletteFromFile(string filename) {
         string content = readText(filePath);
         JSONValue json = parseJSON(content);
         
-        if (json.type != JSONType.array) {
-            writeln("ERROR: Palette file '", filePath, "' must contain a JSON array");
+        JSONValue colorsJson;
+        PaletteFormat format = PaletteFormat.auto_;
+        
+        if (json.type == JSONType.object) {
+            // Check for format field
+            if ("format" in json && json["format"].type == JSONType.string) {
+                string formatStr = json["format"].str.toLower();
+                if (formatStr == "rgb" || formatStr == "rgb255" || formatStr == "255") {
+                    format = PaletteFormat.rgb;
+                } else if (formatStr == "float" || formatStr == "fraction" || formatStr == "normalized") {
+                    format = PaletteFormat.float_;
+                }
+            }
+            
+            // Get colors array
+            if ("colors" in json && json["colors"].type == JSONType.array) {
+                colorsJson = json["colors"];
+            } else {
+                writeln("ERROR: Palette object must have 'colors' array");
+                return null;
+            }
+        } else if (json.type == JSONType.array) {
+            colorsJson = json;
+        } else {
+            writeln("ERROR: Palette file '", filePath, "' must contain a JSON array or object");
             return null;
         }
         
@@ -36,7 +78,7 @@ Color4f[] loadPaletteFromFile(string filename) {
         PalettePoint[] points;
         bool hasPosition = false;
         
-        foreach (pointJson; json.array) {
+        foreach (pointJson; colorsJson.array) {
             if (pointJson.type != JSONType.object) {
                 writeln("WARNING: Skipping invalid palette point (not an object)");
                 continue;
@@ -49,23 +91,18 @@ Color4f[] loadPaletteFromFile(string filename) {
                 auto gVal = pointJson["g"];
                 auto bVal = pointJson["b"];
                 
-                bool isRGB = false;
-                if (rVal.type == JSONType.integer && rVal.integer > 1) {
-                    isRGB = true;
-                } else if (gVal.type == JSONType.integer && gVal.integer > 1) {
-                    isRGB = true;
-                } else if (bVal.type == JSONType.integer && bVal.integer > 1) {
-                    isRGB = true;
-                } else if (rVal.type == JSONType.integer && rVal.integer >= 0 && 
-                          gVal.type == JSONType.integer && gVal.integer >= 0 &&
-                          bVal.type == JSONType.integer && bVal.integer >= 0) {
-                    long maxVal = max(rVal.integer, max(gVal.integer, bVal.integer));
-                    if (maxVal > 1) {
-                        isRGB = true;
+                PaletteFormat useFormat = format;
+                
+                if (useFormat == PaletteFormat.auto_) {
+                    double maxVal = max(getJsonNumber(rVal), max(getJsonNumber(gVal), getJsonNumber(bVal)));
+                    if (maxVal > 1.0) {
+                        useFormat = PaletteFormat.rgb;
+                    } else {
+                        useFormat = PaletteFormat.float_;
                     }
                 }
                 
-                if (isRGB) {
+                if (useFormat == PaletteFormat.rgb) {
                     point.r = cast(float)getJsonNumber(rVal) / 255.0f;
                     point.g = cast(float)getJsonNumber(gVal) / 255.0f;
                     point.b = cast(float)getJsonNumber(bVal) / 255.0f;
@@ -131,7 +168,10 @@ Color4f[] loadPaletteFromFile(string filename) {
             }
         }
         
-        writeln("Loaded palette from '", filePath, "' with ", palette.length, " colors");
+        string formatName = format == PaletteFormat.rgb ? "RGB" : 
+                           format == PaletteFormat.float_ ? "float" : "auto";
+        writeln("Loaded palette from '", filePath, "' (", formatName, " format) with ", palette.length, " colors");
+        stdout.flush();
         return palette;
         
     } catch (Exception e) {

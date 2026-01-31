@@ -206,10 +206,16 @@ private Color4f gradientColor(double iterD, const ref RenderConfig cfg, bool rev
 }
 
 Color4f computeBuddhaColor(int hitCount, int maxHitCount) {
-    if (maxHitCount == 0) return Color4f(0, 0, 0);
+    if (maxHitCount == 0 || hitCount == 0) return Color4f(0, 0, 0);
     
-    double c = pow(cast(double)(hitCount) / cast(double)(maxHitCount), 0.25);
-  if (c > 1) c = 1;
-
-  return Color4f(c, c, c);
+    double logHit = log(1.0 + hitCount);
+    double logMax = log(1.0 + maxHitCount);
+    
+    double normalized = logHit / logMax;
+    
+    double c = pow(normalized, 0.5);
+    
+    if (c > 1) c = 1;
+    
+    return Color4f(cast(float)c, cast(float)c, cast(float)c);
 }

@@ -365,7 +365,7 @@ PerturbResult iteratePerturbationMPFR(
 // MPFR Orbit Tracking for Buddhabrot
 struct MPFROrbitResult {
     IterResult iter;
-    double[2][] orbit;
+    string[2][] orbit;
 }
 
 MPFROrbitResult iterateMPFRWithOrbit(
@@ -396,7 +396,7 @@ MPFROrbitResult iterateMPFRWithOrbit(
                 break;
             }
             
-            result.orbit ~= [z.re.toDouble(), z.im.toDouble()];
+            result.orbit ~= [z.re.toString(), z.im.toString()];
             
             auto newRe = zrSq - ziSq + c.re;
             auto newIm = z.re * z.im * GMPFloat(2.0) + c.im;
@@ -414,7 +414,7 @@ MPFROrbitResult iterateMPFRWithOrbit(
                 break;
             }
             
-            result.orbit ~= [z.re.toDouble(), z.im.toDouble()];
+            result.orbit ~= [z.re.toString(), z.im.toString()];
             
             auto absRe = z.re;
             auto absIm = z.im;
@@ -437,7 +437,7 @@ MPFROrbitResult iterateMPFRWithOrbit(
                 break;
             }
             
-            result.orbit ~= [z.re.toDouble(), z.im.toDouble()];
+            result.orbit ~= [z.re.toString(), z.im.toString()];
             
             auto conjIm = -z.im;
             auto newRe = zrSq - ziSq + c.re;
@@ -458,7 +458,7 @@ MPFROrbitResult iterateMPFRWithOrbit(
                 break;
             }
             
-            result.orbit ~= [z.re.toDouble(), z.im.toDouble()];
+            result.orbit ~= [z.re.toString(), z.im.toString()];
             
             if (options.hasIntegerPower && options.integerPower >= 0) {
                 z.powAndAdd(options.integerPower, c);
@@ -505,7 +505,7 @@ MPFROrbitResult iterateMPFRWithOrbit(
                 break;
             }
             
-            result.orbit ~= [z.re.toDouble(), z.im.toDouble()];
+            result.orbit ~= [z.re.toString(), z.im.toString()];
             
             auto newRe = zrSq - ziSq + c.re;
             auto newIm = z.re * z.im * GMPFloat(2.0) + c.im;

@@ -4,154 +4,54 @@ import std.json;
 import std.conv : to;
 import std.string : toLower;
 import std.math : abs, sqrt;
-import std.algorithm : min;
+import std.algorithm : min, max, countUntil;
+import std.format : format;
 
 import config.params;
+import config.filename : generateFileName;
 import types.fractal;
 
-RenderParams createBrotDesc(JSONValue obj) {
-    RenderParams desc;
-    
-    if ("width" in obj) desc.width = to!int(obj["width"].integer);
-    if ("height" in obj) desc.height = to!int(obj["height"].integer);
-    if ("amp" in obj) {
-        int amp = to!int(obj["amp"].integer);
-        desc.width = 16 * amp;
-        desc.height = 16 * amp;
+double getJsonNumber(JSONValue v) {
+    if (v.type == JSONType.integer) {
+        return cast(double)v.integer;
+    } else if (v.type == JSONType.uinteger) {
+        return cast(double)v.uinteger;
+    } else if (v.type == JSONType.float_) {
+        return v.floating;
     }
-    
-    if ("x" in obj) {
-        desc.originXStr = jsonToString(obj["x"]);
-        try { desc.originX = to!real(desc.originXStr); } catch (Exception) {}
-    }
-    if ("y" in obj) {
-        desc.originYStr = jsonToString(obj["y"]);
-        try { desc.originY = to!real(desc.originYStr); } catch (Exception) {}
-    }
-    if ("radius" in obj) {
-        desc.radiusStr = jsonToString(obj["radius"]);
-        try { desc.radius = to!real(desc.radiusStr); } catch (Exception) {}
-    }
-    
-    if ("x1" in obj && "x2" in obj && "y1" in obj && "y2" in obj) {
-        real x1, x2, y1, y2;
-        string x1Str = jsonToString(obj["x1"]);
-        string x2Str = jsonToString(obj["x2"]);
-        string y1Str = jsonToString(obj["y1"]);
-        string y2Str = jsonToString(obj["y2"]);
-        
-        try {
-            x1 = to!real(x1Str);
-            x2 = to!real(x2Str);
-            y1 = to!real(y1Str);
-            y2 = to!real(y2Str);
-            
-            desc.originX = (x1 + x2) / 2.0;
-            desc.originY = (y1 + y2) / 2.0;
-            desc.radius = min(abs(x2 - x1), abs(y2 - y1)) / 2.0;
-            
-            import std.format : format;
-            desc.originXStr = format!"%.20g"(desc.originX);
-            desc.originYStr = format!"%.20g"(desc.originY);
-            desc.radiusStr = format!"%.20g"(desc.radius);
-        } catch (Exception) {}
-    }
-    
-    if ("dwell" in obj) desc.dwell = to!uint(obj["dwell"].integer);
-    if ("iterations" in obj) desc.dwell = to!uint(obj["iterations"].integer);
-    if ("palette" in obj) desc.palette = to!int(obj["palette"].integer);
-    if ("paletteOffset" in obj || "palette_offset" in obj) {
-        auto key = "paletteOffset" in obj ? "paletteOffset" : "palette_offset";
-        desc.paletteOffset = getJsonFloat(obj[key]);
-    }
-    if ("paletteReverse" in obj || "palette_reverse" in obj) {
-        auto key = "paletteReverse" in obj ? "paletteReverse" : "palette_reverse";
-        desc.paletteReverse = obj[key].type == JSONType.true_;
-    }
-    if ("paletteFile" in obj || "palette_file" in obj) {
-        auto key = "paletteFile" in obj ? "paletteFile" : "palette_file";
-        if (obj[key].type == JSONType.string) {
-            desc.paletteFile = obj[key].str;
-        }
-    }
-    
-    if ("type" in obj) {
-        string typeStr = obj["type"].str.toLower();
-        switch (typeStr) {
-            case "mandelbrot": desc.fractalType = FractalType.mandelbrot; break;
-            case "multibrot": desc.fractalType = FractalType.multibrot; break;
-            case "ship": desc.fractalType = FractalType.ship; break;
-            case "mandelbar": desc.fractalType = FractalType.mandelbar; break;
-            default: break;
-        }
-    }
-    
-    if ("colorfunc" in obj) {
-        string cfStr = obj["colorfunc"].str.toLower();
-        switch (cfStr) {
-            case "ultrafrac": desc.colorfunc = ColorFunc.ultrafrac; break;
-            case "hsv": desc.colorfunc = ColorFunc.hsv; break;
-            case "gray": desc.colorfunc = ColorFunc.gray; break;
-            case "blue": desc.colorfunc = ColorFunc.blue; break;
-            case "red": desc.colorfunc = ColorFunc.red; break;
-            case "seashore": desc.colorfunc = ColorFunc.seashore; break;
-            case "fire": desc.colorfunc = ColorFunc.fire; break;
-            case "oceanid": desc.colorfunc = ColorFunc.oceanid; break;
-            case "cnfsso": desc.colorfunc = ColorFunc.cnfsso; break;
-            case "acid": desc.colorfunc = ColorFunc.acid; break;
-            case "softhours": desc.colorfunc = ColorFunc.softhours; break;
-            default: break;
-        }
-    }
-    
-    if ("multibrotExp" in obj || "exponent" in obj) {
-        auto key = "multibrotExp" in obj ? "multibrotExp" : "exponent";
-        desc.multibrotExp = getJsonFloat(obj[key]);
-    }
-    
-    if ("buddha" in obj && obj["buddha"].type == JSONType.true_) {
-        desc.buddha = BuddhaMode.buddha;
-    }
-    if ("antibuddha" in obj && obj["antibuddha"].type == JSONType.true_) {
-        if (desc.buddha != BuddhaMode.buddha) {
-            desc.buddha = BuddhaMode.antibuddha;
-        }
-    }
-    
-    if ("autoDwell" in obj || "auto_dwell" in obj) {
-        auto key = "autoDwell" in obj ? "autoDwell" : "auto_dwell";
-        desc.autoDwell = obj[key].type == JSONType.true_;
-    }
-    
-    if ("precision" in obj && obj["precision"].type == JSONType.string) {
-        desc.forcePrecision = obj["precision"].str;
-    }
-    if ("arbitrary_precision_method" in obj && obj["arbitrary_precision_method"].type == JSONType.string) {
-        desc.arbitraryPrecisionMethod = obj["arbitrary_precision_method"].str;
-    }
-    
-    if ("perturbations" in obj && obj["perturbations"].type == JSONType.string) {
-        desc.perturbations = obj["perturbations"].str;
-    }
-    
-    if ("x_px_offset" in obj) desc.x_px_offset = to!int(obj["x_px_offset"].integer);
-    if ("y_px_offset" in obj) desc.y_px_offset = to!int(obj["y_px_offset"].integer);
-    
-    if ("filename" in obj && obj["filename"].type == JSONType.string) {
-        desc.filename = obj["filename"].str;
-    }
-    
-    if (desc.filename.length == 0) {
-        import config.filename : generateFileName;
-        desc.filename = generateFileName(desc);
-    }
-    
-    return desc;
+    return 0.0;
 }
 
-private string jsonToString(JSONValue v) {
-    import std.format : format;
-    
+int getJsonInt(JSONValue v) {
+    if (v.type == JSONType.integer) {
+        return cast(int)v.integer;
+    } else if (v.type == JSONType.uinteger) {
+        return cast(int)v.uinteger;
+    } else if (v.type == JSONType.float_) {
+        return cast(int)v.floating;
+    }
+    return 0;
+}
+
+bool isNonZeroNumber(JSONValue v) {
+    if (v.type == JSONType.integer) return v.integer != 0;
+    if (v.type == JSONType.uinteger) return v.uinteger != 0;
+    if (v.type == JSONType.float_) return v.floating != 0;
+    return false;
+}
+
+float getJsonFloat(JSONValue v) {
+    if (v.type == JSONType.float_) {
+        return cast(float)v.floating;
+    } else if (v.type == JSONType.integer) {
+        return cast(float)v.integer;
+    } else if (v.type == JSONType.uinteger) {
+        return cast(float)v.uinteger;
+    }
+    return 0.0f;
+}
+
+string jsonToString(JSONValue v) {
     if (v.type == JSONType.string) {
         return v.str;
     } else if (v.type == JSONType.integer) {
@@ -164,14 +64,186 @@ private string jsonToString(JSONValue v) {
     return "";
 }
 
-private float getJsonFloat(JSONValue v) {
-    if (v.type == JSONType.float_) {
-        return cast(float)v.floating;
-    } else if (v.type == JSONType.integer) {
-        return cast(float)v.integer;
-    } else if (v.type == JSONType.uinteger) {
-        return cast(float)v.uinteger;
-    }
-    return 0.0f;
-}
+RenderParams createBrotDesc(JSONValue s) {
+    RenderParams ret;
+    
+    if (s.type != JSONType.object) return ret;
 
+    if ("width" in s && isNonZeroNumber(s["width"])) ret.width = getJsonInt(s["width"]);
+    if ("height" in s && isNonZeroNumber(s["height"])) ret.height = getJsonInt(s["height"]);
+    
+    if ("amp" in s && isNonZeroNumber(s["amp"])) {
+        ret.width = 16 * getJsonInt(s["amp"]);
+        ret.height = 16 * getJsonInt(s["amp"]);
+    }
+    
+    if ("x1" in s && "x2" in s && "y1" in s && "y2" in s) {
+        const auto x = (getJsonNumber(s["x1"]) + getJsonNumber(s["x2"])) / 2;
+        const auto y = (getJsonNumber(s["y1"]) + getJsonNumber(s["y2"])) / 2;
+        const auto radX = max(getJsonNumber(s["x1"]), getJsonNumber(s["x2"])) - 
+                         min(getJsonNumber(s["x1"]), getJsonNumber(s["x2"]));
+        const auto radY = max(getJsonNumber(s["y1"]), getJsonNumber(s["y2"])) - 
+                         min(getJsonNumber(s["y1"]), getJsonNumber(s["y2"]));
+
+        ret.originX = x;
+        ret.originY = y;
+        ret.radius = max(radX, radY);
+        
+        ret.originXStr = format!"%.20g"(x);
+        ret.originYStr = format!"%.20g"(y);
+        ret.radiusStr = format!"%.20g"(ret.radius);
+    }
+
+    if ("x" in s) {
+        if (s["x"].type == JSONType.string) {
+            ret.originXStr = s["x"].str;
+            try { ret.originX = to!real(s["x"].str); } catch (Exception) {}
+        } else {
+            ret.originX = getJsonNumber(s["x"]);
+            ret.originXStr = format!"%.20g"(ret.originX);
+        }
+    }
+    if ("y" in s) {
+        if (s["y"].type == JSONType.string) {
+            ret.originYStr = s["y"].str;
+            try { ret.originY = to!real(s["y"].str); } catch (Exception) {}
+        } else {
+            ret.originY = getJsonNumber(s["y"]);
+            ret.originYStr = format!"%.20g"(ret.originY);
+        }
+    }
+    if ("radius" in s) {
+        if (s["radius"].type == JSONType.string) {
+            ret.radiusStr = s["radius"].str;
+            try { ret.radius = to!real(s["radius"].str); } catch (Exception) {}
+        } else {
+            ret.radius = getJsonNumber(s["radius"]);
+            ret.radiusStr = format!"%.20g"(ret.radius);
+        }
+    }
+    
+    if ("precision" in s && s["precision"].type == JSONType.string) {
+        ret.forcePrecision = s["precision"].str;
+    } else if ("precisionMode" in s && s["precisionMode"].type == JSONType.string) {
+        ret.forcePrecision = s["precisionMode"].str;
+    }
+    
+    if ("arbitrary_precision_method" in s && s["arbitrary_precision_method"].type == JSONType.string) {
+        ret.arbitraryPrecisionMethod = s["arbitrary_precision_method"].str;
+    } else if ("arbitraryPrecisionMethod" in s && s["arbitraryPrecisionMethod"].type == JSONType.string) {
+        ret.arbitraryPrecisionMethod = s["arbitraryPrecisionMethod"].str;
+    }
+    
+    if ("zoom" in s) {
+        string zoomStr;
+        if (s["zoom"].type == JSONType.string) {
+            zoomStr = s["zoom"].str;
+        } else {
+            zoomStr = format!"%.20g"(getJsonNumber(s["zoom"]));
+        }
+        
+        auto ePos = zoomStr.countUntil!(c => c == 'e' || c == 'E')();
+        if (ePos >= 0) {
+            string mantissa = zoomStr[0..ePos];
+            int exp = to!int(zoomStr[ePos + 1 .. $]);
+            double mant = to!double(mantissa);
+            double invMant = 1.0 / mant;
+            int newExp = -exp;
+            ret.radiusStr = format!"%.10ge%d"(invMant, newExp);
+            try { ret.radius = to!real(ret.radiusStr); } catch (Exception) {}
+        } else {
+            double zoom = to!double(zoomStr);
+            ret.radius = 1.0 / zoom;
+            ret.radiusStr = format!"%.20g"(ret.radius);
+        }
+    }
+    
+    if ("dwell" in s && isNonZeroNumber(s["dwell"])) ret.dwell = getJsonInt(s["dwell"]);
+    if ("iterations" in s && isNonZeroNumber(s["iterations"])) ret.dwell = getJsonInt(s["iterations"]);
+    if ("palette" in s) ret.palette = getJsonInt(s["palette"]);
+    if ("paletteOffset" in s) ret.paletteOffset = cast(float)getJsonNumber(s["paletteOffset"]);
+    if ("palette_offset" in s) ret.paletteOffset = cast(float)getJsonNumber(s["palette_offset"]);
+    if ("palette_reverse" in s && s["palette_reverse"].type == JSONType.true_) {
+        ret.paletteReverse = true;
+    } else if ("paletteReverse" in s && s["paletteReverse"].type == JSONType.true_) {
+        ret.paletteReverse = true;
+    }
+    if ("paletteFile" in s && s["paletteFile"].type == JSONType.string) {
+        ret.paletteFile = s["paletteFile"].str;
+    } else if ("palette_file" in s && s["palette_file"].type == JSONType.string) {
+        ret.paletteFile = s["palette_file"].str;
+    }
+    
+    if ("multibrotExp" in s) ret.multibrotExp = cast(float)getJsonNumber(s["multibrotExp"]);
+    if ("exponent" in s) ret.multibrotExp = cast(float)getJsonNumber(s["exponent"]);
+    
+    if ("type" in s && s["type"].type == JSONType.string) {
+        string typeStr = s["type"].str.toLower();
+        switch (typeStr) {
+            case "mandelbrot": ret.fractalType = FractalType.mandelbrot; break;
+            case "multibrot": ret.fractalType = FractalType.multibrot; break;
+            case "ship": ret.fractalType = FractalType.ship; break;
+            case "mandelbar": ret.fractalType = FractalType.mandelbar; break;
+            default: break;
+        }
+    }
+    
+    if ("colorfunc" in s && s["colorfunc"].type == JSONType.string) {
+        string cfStr = s["colorfunc"].str.toLower();
+        bool isBuiltin = true;
+        switch (cfStr) {
+            case "ultrafrac": ret.colorfunc = ColorFunc.ultrafrac; break;
+            case "hsv": ret.colorfunc = ColorFunc.hsv; break;
+            case "gray": ret.colorfunc = ColorFunc.gray; break;
+            case "blue": ret.colorfunc = ColorFunc.blue; break;
+            case "red": ret.colorfunc = ColorFunc.red; break;
+            case "base": ret.colorfunc = ColorFunc.base; break;
+            case "seashore": ret.colorfunc = ColorFunc.seashore; break;
+            case "fire": ret.colorfunc = ColorFunc.fire; break;
+            case "oceanid": ret.colorfunc = ColorFunc.oceanid; break;
+            case "cnfsso": ret.colorfunc = ColorFunc.cnfsso; break;
+            case "acid": ret.colorfunc = ColorFunc.acid; break;
+            case "softhours": ret.colorfunc = ColorFunc.softhours; break;
+            default: 
+                isBuiltin = false;
+                ret.colorfunc = ColorFunc.ultrafrac;
+                if (cfStr.length > 5 && cfStr[$-5..$] == ".json") {
+                    ret.paletteFile = cfStr;
+                } else {
+                    ret.paletteFile = cfStr ~ ".json";
+                }
+                break;
+        }
+    }
+
+    if ("buddha" in s && s["buddha"].type == JSONType.true_) {
+        ret.buddha = BuddhaMode.buddha;
+    } else if ("antibuddha" in s && s["antibuddha"].type == JSONType.true_) {
+        ret.buddha = BuddhaMode.antibuddha;
+    }
+    
+    if ("autoDwell" in s && s["autoDwell"].type == JSONType.true_) {
+        ret.autoDwell = true;
+    } else if ("auto_dwell" in s && s["auto_dwell"].type == JSONType.true_) {
+        ret.autoDwell = true;
+    }
+    
+    if ("perturbations" in s && s["perturbations"].type == JSONType.string) {
+        ret.perturbations = s["perturbations"].str;
+    }
+    
+    if ("x_px_offset" in s) {
+        ret.x_px_offset = getJsonInt(s["x_px_offset"]);
+    }
+    if ("y_px_offset" in s) {
+        ret.y_px_offset = getJsonInt(s["y_px_offset"]);
+    }
+    
+    if ("filename" in s && s["filename"].type == JSONType.string) {
+        ret.filename = s["filename"].str;
+    } else {
+        ret.filename = generateFileName(ret);
+    }
+    
+    return ret;
+}

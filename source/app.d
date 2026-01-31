@@ -12,6 +12,8 @@ import mandel;
 import flow;
 import config.params : RenderParams;
 import config.filename : generateFileName;
+import config.animation : generateAnimateSequence, generateChunksSequence;
+import config.json_loader : createBrotDesc;
 
 int main(string[] args) {
     int amp = 50;
@@ -25,6 +27,7 @@ int main(string[] args) {
 
     string filename = "";
     string flowlist = "";
+    string colorFuncArg = "";
     
     RenderParams[] queue;
     
@@ -48,7 +51,7 @@ int main(string[] args) {
         "output|o", "Output filename, generated based on parameters by default", &filename,
         "dir|d", "Output directory, `out` by default (created if does not exist)", &flow.workdir,
         "type|t", "Fractal type (mandelbrot, multibrot, ship, mandelbar), mandelbrot by default", &cli.fractalType,
-        "colorfunc|c", "Coloring function (ultrafrac, hsv, gray, blue, red, seashore, fire, oceanid, cnfsso, acid, softhours), ultrafrac by default", &cli.colorfunc,
+        "colorfunc|c", "Color palette (ultrafrac, hsv, gray, fire, etc.) or custom palette name from palettes/", &colorFuncArg,
         "exponent|e", "Multibrot exponent, 2.0 by default", &cli.multibrotExp,
         "progress|s", "Save results to a separate file while working/import progress on load if found\n" ~
                                     "\t-1 for default block size (by percentage of lines), or any other int 1-50", &flow.saveProgress,
@@ -84,6 +87,32 @@ int main(string[] args) {
         cli.radiusStr = radiusArg;
         try { cli.radius = to!real(radiusArg); } catch (Exception) {}
     }
+
+    if (colorFuncArg.length > 0) {
+        string cfStr = colorFuncArg.toLower();
+        switch (cfStr) {
+            case "ultrafrac": cli.colorfunc = ColorFunc.ultrafrac; break;
+            case "hsv": cli.colorfunc = ColorFunc.hsv; break;
+            case "gray": cli.colorfunc = ColorFunc.gray; break;
+            case "blue": cli.colorfunc = ColorFunc.blue; break;
+            case "red": cli.colorfunc = ColorFunc.red; break;
+            case "base": cli.colorfunc = ColorFunc.base; break;
+            case "seashore": cli.colorfunc = ColorFunc.seashore; break;
+            case "fire": cli.colorfunc = ColorFunc.fire; break;
+            case "oceanid": cli.colorfunc = ColorFunc.oceanid; break;
+            case "cnfsso": cli.colorfunc = ColorFunc.cnfsso; break;
+            case "acid": cli.colorfunc = ColorFunc.acid; break;
+            case "softhours": cli.colorfunc = ColorFunc.softhours; break;
+            default:
+                cli.colorfunc = ColorFunc.ultrafrac;
+                if (cfStr.length > 5 && cfStr[$-5..$] == ".json") {
+                    cli.paletteFile = cfStr;
+                } else {
+                    cli.paletteFile = cfStr ~ ".json";
+                }
+                break;
+        }
+    }
     
     // Generate flow from JSON list
     if (flowlist != "" && flowlist.exists()) {
@@ -100,22 +129,22 @@ int main(string[] args) {
         }
 
         if (jsonList.type == JSONType.object) {
-            queue ~= jsonList.createBrotDesc();
+            queue ~= createBrotDesc();
         } else {
             foreach (obj; jsonList.array) {
                 // Handle animation sequences
                 if ("animate" in obj && obj["animate"].integer && "from" in obj && "to" in obj) {
-                    flow.generateAnimateSequence(queue, obj);
+                    generateAnimateSequence(queue, obj);
                     continue;
                 }
 
                 // Handle chunked rendering
                 if ("chunks" in obj && obj["chunks"].integer) {
-                    flow.generateChunksSequence(queue, obj);
+                    generateChunksSequence(queue, obj);
                     continue;
                 }
                 
-                queue ~= obj.createBrotDesc();
+                queue ~= createBrotDesc();
             }
         }
     } else {
