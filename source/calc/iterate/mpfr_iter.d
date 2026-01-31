@@ -362,3 +362,169 @@ PerturbResult iteratePerturbationMPFR(
     return pr;
 }
 
+// MPFR Orbit Tracking for Buddhabrot
+struct MPFROrbitResult {
+    IterResult iter;
+    double[2][] orbit;
+}
+
+MPFROrbitResult iterateMPFRWithOrbit(
+    int px, int py,
+    const ref RenderConfig cfg,
+    ref MPFRPixelConverter converter,
+    const ref GMPFractalOptions options
+) {
+    MPFROrbitResult result;
+    result.orbit.reserve(cfg.maxIterations);
+    
+    auto c = GMPComplex("0", "0");
+    converter.pixelToComplex(px, py, c);
+    
+    auto z = GMPComplex("0", "0");
+    
+    auto escapeThreshold = GMPFloat(1 << 16);
+    
+    int iter;
+    
+    if (cfg.fractalType == FractalType.mandelbrot) {
+        for (iter = 0; iter < cfg.maxIterations; iter++) {
+            auto zrSq = z.re.sqr();
+            auto ziSq = z.im.sqr();
+            auto magSq = zrSq + ziSq;
+            
+            if (magSq.toDouble() > escapeThreshold.toDouble()) {
+                break;
+            }
+            
+            result.orbit ~= [z.re.toDouble(), z.im.toDouble()];
+            
+            auto newRe = zrSq - ziSq + c.re;
+            auto newIm = z.re * z.im * GMPFloat(2.0) + c.im;
+            z.re = newRe;
+            z.im = newIm;
+        }
+    }
+    else if (cfg.fractalType == FractalType.ship) {
+        for (iter = 0; iter < cfg.maxIterations; iter++) {
+            auto zrSq = z.re.sqr();
+            auto ziSq = z.im.sqr();
+            auto magSq = zrSq + ziSq;
+            
+            if (magSq.toDouble() > escapeThreshold.toDouble()) {
+                break;
+            }
+            
+            result.orbit ~= [z.re.toDouble(), z.im.toDouble()];
+            
+            auto absRe = z.re;
+            auto absIm = z.im;
+            if (absRe.toDouble() < 0) absRe = -absRe;
+            if (absIm.toDouble() < 0) absIm = -absIm;
+            
+            auto newRe = absRe.sqr() - absIm.sqr() + c.re;
+            auto newIm = absRe * absIm * GMPFloat(2.0) + c.im;
+            z.re = newRe;
+            z.im = newIm;
+        }
+    }
+    else if (cfg.fractalType == FractalType.mandelbar) {
+        for (iter = 0; iter < cfg.maxIterations; iter++) {
+            auto zrSq = z.re.sqr();
+            auto ziSq = z.im.sqr();
+            auto magSq = zrSq + ziSq;
+            
+            if (magSq.toDouble() > escapeThreshold.toDouble()) {
+                break;
+            }
+            
+            result.orbit ~= [z.re.toDouble(), z.im.toDouble()];
+            
+            auto conjIm = -z.im;
+            auto newRe = zrSq - ziSq + c.re;
+            auto newIm = z.re * conjIm * GMPFloat(2.0) + c.im;
+            z.re = newRe;
+            z.im = newIm;
+        }
+    }
+    else if (cfg.fractalType == FractalType.multibrot) {
+        double exp = cfg.multibrotExp;
+        
+        for (iter = 0; iter < cfg.maxIterations; iter++) {
+            auto zrSq = z.re.sqr();
+            auto ziSq = z.im.sqr();
+            auto magSq = zrSq + ziSq;
+            
+            if (magSq.toDouble() > escapeThreshold.toDouble()) {
+                break;
+            }
+            
+            result.orbit ~= [z.re.toDouble(), z.im.toDouble()];
+            
+            if (options.hasIntegerPower && options.integerPower >= 0) {
+                z.powAndAdd(options.integerPower, c);
+            } else {
+                double zrD = z.re.toDouble();
+                double ziD = z.im.toDouble();
+                
+                import std.math : sqrt, atan2, cos, sin, pow, log;
+                double mag = sqrt(zrD * zrD + ziD * ziD);
+                
+                if (mag < 1e-300) {
+                    z.re = c.re;
+                    z.im = c.im;
+                } else if (exp < 0) {
+                    double posExp = -exp;
+                    double newMag = pow(mag, posExp);
+                    if (newMag > 1e300) {
+                        break;
+                    }
+                    double invMag = 1.0 / newMag;
+                    double theta = atan2(ziD, zrD);
+                    double newTheta = -posExp * theta;
+                    
+                    z.re = GMPFloat(invMag * cos(newTheta)) + c.re;
+                    z.im = GMPFloat(invMag * sin(newTheta)) + c.im;
+                } else {
+                    double newMag = pow(mag, exp);
+                    double theta = atan2(ziD, zrD);
+                    double newTheta = exp * theta;
+                    
+                    z.re = GMPFloat(newMag * cos(newTheta)) + c.re;
+                    z.im = GMPFloat(newMag * sin(newTheta)) + c.im;
+                }
+            }
+        }
+    }
+    else {
+        for (iter = 0; iter < cfg.maxIterations; iter++) {
+            auto zrSq = z.re.sqr();
+            auto ziSq = z.im.sqr();
+            auto magSq = zrSq + ziSq;
+            
+            if (magSq.toDouble() > escapeThreshold.toDouble()) {
+                break;
+            }
+            
+            result.orbit ~= [z.re.toDouble(), z.im.toDouble()];
+            
+            auto newRe = zrSq - ziSq + c.re;
+            auto newIm = z.re * z.im * GMPFloat(2.0) + c.im;
+            z.re = newRe;
+            z.im = newIm;
+        }
+    }
+    
+    double smoothed = cast(double)iter;
+    if (iter < cfg.maxIterations && iter > 0) {
+        auto zrSq = z.re.sqr();
+        auto ziSq = z.im.sqr();
+        auto finalMag = (zrSq + ziSq).toDouble();
+        if (finalMag > 1) {
+            smoothed = iter + 1 - log(log(finalMag) / 2) / log(2.0);
+        }
+    }
+    
+    result.iter = IterResult(iter, smoothed);
+    return result;
+}
+

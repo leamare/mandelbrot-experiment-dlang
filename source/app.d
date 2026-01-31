@@ -11,6 +11,7 @@ import std.json;
 import mandel;
 import flow;
 import config.params : RenderParams;
+import config.filename : generateFileName;
 
 int main(string[] args) {
     int amp = 50;
@@ -122,7 +123,7 @@ int main(string[] args) {
         cli.height = h ? h : 16 * amp;
 
         if (!filename.length) {
-            cli.filename = flow.generateFileName(cli);
+            cli.filename = generateFileName(cli);
         } else {
             cli.filename = filename;
         }

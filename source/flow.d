@@ -30,8 +30,14 @@ import types.fractal : GMPFractalOptions, determineGMPFractalOptions, FractalTyp
 import types.render : RenderConfig;
 import render.coloring : computeColor;
 import config.params : RenderParams;
+import config.filename : generateFileName;
 import utils.dwell : estimateDwell;
 import utils.precision_auto : combinedPrecisionDigits, digitsPerPixel, getZoomExponent;
+import utils.color : estimatePalette;
+
+// =============================================================================
+// Module-level Configuration
+// =============================================================================
 
 import precision.constants;
 
@@ -45,11 +51,6 @@ uint combinedPrecisionDigitsForParams(const ref RenderParams desc) {
 
 double digitsPerPixelForParams(const ref RenderParams desc) {
     return digitsPerPixel(desc.radius, desc.width, desc.height, desc.radiusStr);
-}
-
-int estimatePalette(uint dwell) {
-    import utils.color : estimatePalette;
-    return cast(int)estimatePalette(dwell);
 }
 
 // =============================================================================
@@ -300,10 +301,31 @@ private void iterateWithProgress(ref IterResult[][] iters, const ref RenderConfi
 
 private void iterateBuddhabrot(ref IterResult[][] iters, const ref RenderConfig cfg,
                                const ref RenderParams desc, int wfactor) {
-    if (cfg.precisionMode == PrecisionMode.arbitrary) {
-        writeln("Warning: Buddhabrot mode requires orbit tracking which is only available");
-        writeln("  in double precision. Using double precision for Buddhabrot rendering.");
-        writeln("  For deep zooms with Buddhabrot, consider using smaller regions.");
+    import calc.iterate.mpfr_iter : MPFRPixelConverter, MPFROrbitResult, iterateMPFRWithOrbit;
+    import std.math : ceil;
+    
+    bool useMPFR = cfg.precisionMode == PrecisionMode.arbitrary;
+    
+    uint digits = 50;
+    GMPFractalOptions gmpOptions;
+    string originXStr, originYStr, radiusStr;
+    
+    if (useMPFR) {
+        uint baseDigits = combinedPrecisionDigitsForParams(desc);
+        double perPixelDigits = digitsPerPixelForParams(desc);
+        uint perPixelRequired = perPixelDigits > 0
+            ? cast(uint)ceil(perPixelDigits + 20.0)
+            : 0;
+        digits = max(baseDigits, perPixelRequired);
+        
+        GMPFloat.setPrecisionDigits(digits);
+        gmpOptions = determineGMPFractalOptions(cfg.multibrotExp);
+        
+        originXStr = desc.originXStr;
+        originYStr = desc.originYStr;
+        radiusStr = desc.radiusStr;
+        
+        writeln("Using MPFR precision (", digits, " digits) for Buddhabrot orbit tracking");
         stdout.flush();
     }
     
@@ -320,28 +342,60 @@ private void iterateBuddhabrot(ref IterResult[][] iters, const ref RenderConfig 
     
     writeln("Using ", numThreads, " threads for Buddhabrot");
     
-    auto wRange = iota(0, desc.width);
+    int width = desc.width;
+    int height = desc.height;
+    
+    auto wRange = iota(0, width);
     foreach (x; parallel(wRange)) {
         auto tid = x % numThreads;
         
-        for (int y = 0; y < desc.height; y++) {
-            auto result = iterateWithOrbit(x, y, cfg);
-            iters[x][y] = result.iter;
+        if (useMPFR) {
+            GMPFloat.setPrecisionDigits(digits);
             
-            bool shouldAccumulate = (desc.buddha == BuddhaMode.antibuddha) || 
-                                    (result.iter.iterations < cfg.maxIterations);
+            auto localConverter = MPFRPixelConverter(
+                width, height,
+                originXStr, originYStr, radiusStr
+            );
             
-            if (shouldAccumulate) {
-                foreach (point; result.orbit) {
-                    auto pixel = complexToPixel(point[0], point[1], cfg);
-                    int px = pixel[0];
-                    int py = pixel[1];
-                    if (px >= 0 && px < desc.width && py >= 0 && py < desc.height) {
-                        localBuffers[tid][px * desc.height + py]++;
+            for (int y = 0; y < height; y++) {
+                auto result = iterateMPFRWithOrbit(x, y, cfg, localConverter, gmpOptions);
+                iters[x][y] = result.iter;
+                
+                bool shouldAccumulate = (desc.buddha == BuddhaMode.antibuddha) || 
+                                        (result.iter.iterations < cfg.maxIterations);
+                
+                if (shouldAccumulate) {
+                    foreach (point; result.orbit) {
+                        auto pixel = complexToPixel(point[0], point[1], cfg);
+                        int px = pixel[0];
+                        int py = pixel[1];
+                        if (px >= 0 && px < width && py >= 0 && py < height) {
+                            localBuffers[tid][px * height + py]++;
+                        }
+                    }
+                }
+            }
+        } else {
+            for (int y = 0; y < height; y++) {
+                auto result = iterateWithOrbit(x, y, cfg);
+                iters[x][y] = result.iter;
+                
+                bool shouldAccumulate = (desc.buddha == BuddhaMode.antibuddha) || 
+                                        (result.iter.iterations < cfg.maxIterations);
+                
+                if (shouldAccumulate) {
+                    foreach (point; result.orbit) {
+                        auto pixel = complexToPixel(point[0], point[1], cfg);
+                        int px = pixel[0];
+                        int py = pixel[1];
+                        if (px >= 0 && px < width && py >= 0 && py < height) {
+                            localBuffers[tid][px * height + py]++;
+                        }
                     }
                 }
             }
         }
+        
         if (x % wfactor == 0) {
             write('.');
             stdout.flush();
@@ -351,21 +405,20 @@ private void iterateBuddhabrot(ref IterResult[][] iters, const ref RenderConfig 
     writeln("\nMerging Buddhabrot data...");
     
     foreach (tid; 0 .. numThreads) {
-        foreach (x; 0 .. desc.width) {
-            foreach (y; 0 .. desc.height) {
-                accumulator.data[x][y] += localBuffers[tid][x * desc.height + y];
+        foreach (x; 0 .. width) {
+            foreach (y; 0 .. height) {
+                accumulator.data[x][y] += localBuffers[tid][x * height + y];
             }
         }
     }
     
-    
     int maxVal = accumulator.maxHits();
     writeln("Max buddha hits: ", maxVal);
     
-    SuperImage buddhaImg = image(desc.width, desc.height);
+    SuperImage buddhaImg = image(width, height);
     
-    foreach (x; 0 .. desc.width) {
-        for (int y = 0; y < desc.height; y++) {
+    foreach (x; 0 .. width) {
+        for (int y = 0; y < height; y++) {
             buddhaImg[x, y] = computeBuddhaColor(accumulator.data[x][y], maxVal);
         }
         if (x % wfactor == 0) {
@@ -377,23 +430,6 @@ private void iterateBuddhabrot(ref IterResult[][] iters, const ref RenderConfig 
     string buddhaPrefix = desc.buddha == BuddhaMode.buddha ? "buddha_" : "antibuddha_";
     writeln("\nSaving: " ~ workdir ~ "/" ~ buddhaPrefix ~ desc.filename ~ ".png");
     savePNG(buddhaImg, workdir ~ "/" ~ buddhaPrefix ~ desc.filename ~ ".png");
-}
-
-// =============================================================================
-// File Name Generation
-// =============================================================================
-
-string generateFileName(RenderParams s) {
-    return to!string(s.fractalType) ~ 
-    "_X=" ~ format!"%.17g"(s.originX) ~
-    "_Y=" ~ format!"%.17g"(s.originY) ~
-    "_R=" ~ format!"%.17g"(s.radius) ~
-    "_W=" ~ to!string(s.width) ~
-    "_H=" ~ to!string(s.height) ~
-    "_I=" ~ to!string(s.dwell) ~ 
-    "_P=" ~ to!string(s.palette ? s.palette : s.dwell) ~ 
-    "_C=" ~ to!string(s.colorfunc) ~ 
-        (s.fractalType == FractalType.multibrot ? "_E=" ~ to!string(s.multibrotExp) : "");
 }
 
 // =============================================================================
@@ -577,107 +613,227 @@ RenderParams createBrotDesc(JSONValue s) {
 // =============================================================================
 
 void generateAnimateSequence(ref RenderParams[] queue, JSONValue animate) {
-	const int frames = to!int(animate["animate"].integer);
-	const int skip = "skip" in animate ? to!int(animate["skip"].integer) : 0;
+    const int frames = to!int(animate["animate"].integer);
+    const int skip = "skip" in animate ? to!int(animate["skip"].integer) : 0;
     const RenderParams fromParams = createBrotDesc(animate["from"]);
     const RenderParams toParams = createBrotDesc(animate["to"]);
     const int w = fromParams.width;
     const int h = fromParams.height;
 
-	const string fpath = "animate_FRAMES=" ~ to!string(frames) ~ 
-		"_W=" ~ to!string(w) ~ "_H=" ~ to!string(h) ~
+    const string fpath = "animate_FRAMES=" ~ to!string(frames) ~ 
+        "_W=" ~ to!string(w) ~ "_H=" ~ to!string(h) ~
         "_X0=" ~ format!"%.17g"(fromParams.originX) ~ "_Y0=" ~ 
         format!"%.17g"(fromParams.originY) ~ "_Rn=" ~ format!"%.17g"(toParams.radius) ~ "/";
 
-	if (!(workdir ~ "/" ~ fpath).exists) (workdir ~ "/" ~ fpath).mkdir;
+    if (!(workdir ~ "/" ~ fpath).exists) (workdir ~ "/" ~ fpath).mkdir;
 
-    const double deltaX = (toParams.originX - fromParams.originX) / to!double(frames);
-    const double deltaY = (toParams.originY - fromParams.originY) / to!double(frames);
-    const double deltaRadius = (log(toParams.radius) - log(fromParams.radius)) / to!double(frames);
-    const float deltaDwell = (log(cast(double)toParams.dwell) - log(cast(double)fromParams.dwell)) / to!double(frames);
-    const float deltaPalette = (log(cast(double)(toParams.palette ? toParams.palette : toParams.dwell)) - 
-        log(cast(double)(fromParams.palette ? fromParams.palette : fromParams.dwell))) / to!double(frames);
-    const float deltaExp = (toParams.multibrotExp - fromParams.multibrotExp) / to!double(frames);
+    bool needsHighPrecision = (fromParams.determinePrecisionMode() == PrecisionMode.arbitrary) ||
+                              (toParams.determinePrecisionMode() == PrecisionMode.arbitrary);
     
-    for (int i = 0; i <= frames; i++) {
-		if (i < skip) continue;
-		
-        RenderParams ret;
-
-		ret.width = w;
-		ret.height = h;
-        ret.originX = fromParams.originX + deltaX * i;
-        ret.originY = fromParams.originY + deltaY * i;
-        ret.radius = exp(log(fromParams.radius) + deltaRadius * i);
+    if (needsHighPrecision) {
+        uint digits = max(combinedPrecisionDigitsForParams(fromParams), 
+                         combinedPrecisionDigitsForParams(toParams));
+        GMPFloat.setPrecisionDigits(digits + 20);
         
-        ret.originXStr = format!"%.20g"(ret.originX);
-        ret.originYStr = format!"%.20g"(ret.originY);
-        ret.radiusStr = format!"%.20g"(ret.radius);
+        auto fromX = GMPFloat(fromParams.originXStr);
+        auto fromY = GMPFloat(fromParams.originYStr);
+        auto fromR = GMPFloat(fromParams.radiusStr);
+        auto toX = GMPFloat(toParams.originXStr);
+        auto toY = GMPFloat(toParams.originYStr);
+        auto toR = GMPFloat(toParams.radiusStr);
+        auto framesGMP = GMPFloat(cast(double)frames);
         
-        ret.dwell = cast(int)exp(log(cast(double)fromParams.dwell) + deltaDwell * i);
-        ret.palette = cast(int)exp(log(cast(double)fromParams.palette) + deltaPalette * i);
+        auto deltaX = (toX - fromX) / framesGMP;
+        auto deltaY = (toY - fromY) / framesGMP;
         
-        ret.multibrotExp = fromParams.multibrotExp + (deltaExp * i);
+        double logFromR = log(fromParams.radius);
+        double logToR = log(toParams.radius);
+        double deltaLogR = (logToR - logFromR) / cast(double)frames;
         
-        ret.fractalType = fromParams.fractalType;
-        ret.colorfunc = fromParams.colorfunc;
-        ret.buddha = fromParams.buddha;
-
-		ret.filename = fpath ~ "frame_" ~ format!"%06d"(i);
-
-        queue ~= ret;
-	}
-}
-
-void generateChunksSequence(ref RenderParams[] queue, JSONValue source) {
-	const int chunks = to!int(source["chunks"].integer);
-    const RenderParams s = createBrotDesc(source);
-
-	const string fpath = "CHUNKED=" ~ to!string(chunks) ~ "_" ~ s.filename ~ "/";
-
-	if (!(workdir ~ "/" ~ fpath).exists) (workdir ~ "/" ~ fpath).mkdir;
-
-    if (s.buddha != BuddhaMode.none) {
-		if (!(workdir ~ "/" ~ to!string(s.buddha) ~ "_" ~ fpath).exists) 
-			(workdir ~ "/" ~ to!string(s.buddha) ~ "_" ~ fpath).mkdir;
-	}
-
-    const int w = cast(int)(s.width / to!double(chunks));
-    const int h = cast(int)(s.height / to!double(chunks));
-
-    const double diff = cast(double)(min(w, h)) / max(w, h);
-    const double radiusX = s.radius * (w > h ? 1 : diff) / to!double(chunks);
-    const double radiusY = s.radius * (w < h ? 1 : diff) / to!double(chunks);
-
-    const double x1 = s.originX - (s.radius * (w > h ? 1 : diff) / to!double(chunks)) * (chunks / 2 + 2);
-    const double y1 = s.originY + (s.radius * (w < h ? 1 : diff) / to!double(chunks)) * (chunks / 2 + 2);
-    
-    for (int i = 0; i < chunks; i++) {
-        for (int j = 0; j < chunks; j++) {
+        float deltaDwell = (log(cast(double)toParams.dwell) - log(cast(double)fromParams.dwell)) / cast(double)frames;
+        float deltaPalette = (log(cast(double)(toParams.palette ? toParams.palette : toParams.dwell)) - 
+            log(cast(double)(fromParams.palette ? fromParams.palette : fromParams.dwell))) / cast(double)frames;
+        float deltaExp = (toParams.multibrotExp - fromParams.multibrotExp) / cast(double)frames;
+        
+        for (int i = 0; i <= frames; i++) {
+            if (i < skip) continue;
+            
             RenderParams ret;
+            ret.width = w;
+            ret.height = h;
+            
+            auto iGMP = GMPFloat(cast(double)i);
+            auto currentX = fromX + deltaX * iGMP;
+            auto currentY = fromY + deltaY * iGMP;
+            
+            ret.originXStr = currentX.toString();
+            ret.originYStr = currentY.toString();
+            
+            ret.radius = exp(logFromR + deltaLogR * i);
+            ret.radiusStr = format!"%.20g"(ret.radius);
+            
+            try {
+                ret.originX = to!real(ret.originXStr);
+                ret.originY = to!real(ret.originYStr);
+            } catch (Exception) {
+                ret.originX = currentX.toDouble();
+                ret.originY = currentY.toDouble();
+            }
+            
+            ret.dwell = cast(int)exp(log(cast(double)fromParams.dwell) + deltaDwell * i);
+            ret.palette = cast(int)exp(log(cast(double)fromParams.palette) + deltaPalette * i);
+            ret.multibrotExp = fromParams.multibrotExp + (deltaExp * i);
+            
+            ret.fractalType = fromParams.fractalType;
+            ret.colorfunc = fromParams.colorfunc;
+            ret.buddha = fromParams.buddha;
+            ret.filename = fpath ~ "frame_" ~ format!"%06d"(i);
 
-			ret.width = w;
-			ret.height = h;
-			ret.originX = x1 + radiusX * 2 * (j + 0.5);
-			ret.originY = y1 - radiusY * 2 * (i + 0.5);
-			ret.radius = min(radiusX, radiusY);
+            queue ~= ret;
+        }
+    } else {
+        double deltaX = (toParams.originX - fromParams.originX) / cast(double)frames;
+        double deltaY = (toParams.originY - fromParams.originY) / cast(double)frames;
+        double deltaRadius = (log(toParams.radius) - log(fromParams.radius)) / cast(double)frames;
+        float deltaDwell = (log(cast(double)toParams.dwell) - log(cast(double)fromParams.dwell)) / cast(double)frames;
+        float deltaPalette = (log(cast(double)(toParams.palette ? toParams.palette : toParams.dwell)) - 
+            log(cast(double)(fromParams.palette ? fromParams.palette : fromParams.dwell))) / cast(double)frames;
+        float deltaExp = (toParams.multibrotExp - fromParams.multibrotExp) / cast(double)frames;
+        
+        for (int i = 0; i <= frames; i++) {
+            if (i < skip) continue;
+            
+            RenderParams ret;
+            ret.width = w;
+            ret.height = h;
+            ret.originX = fromParams.originX + deltaX * i;
+            ret.originY = fromParams.originY + deltaY * i;
+            ret.radius = exp(log(fromParams.radius) + deltaRadius * i);
             
             ret.originXStr = format!"%.20g"(ret.originX);
             ret.originYStr = format!"%.20g"(ret.originY);
             ret.radiusStr = format!"%.20g"(ret.radius);
-
-			ret.dwell = s.dwell;
-			ret.palette = s.palette;
-
-			ret.multibrotExp = s.multibrotExp;
-
-            ret.fractalType = s.fractalType;
-			ret.colorfunc = s.colorfunc;
-			ret.buddha = s.buddha;
-
-            ret.filename = fpath ~ "chunk_" ~ format!"%06d"(i * chunks + j);
+            
+            ret.dwell = cast(int)exp(log(cast(double)fromParams.dwell) + deltaDwell * i);
+            ret.palette = cast(int)exp(log(cast(double)fromParams.palette) + deltaPalette * i);
+            ret.multibrotExp = fromParams.multibrotExp + (deltaExp * i);
+            
+            ret.fractalType = fromParams.fractalType;
+            ret.colorfunc = fromParams.colorfunc;
+            ret.buddha = fromParams.buddha;
+            ret.filename = fpath ~ "frame_" ~ format!"%06d"(i);
 
             queue ~= ret;
-		}
-	}
+        }
+    }
+}
+
+void generateChunksSequence(ref RenderParams[] queue, JSONValue source) {
+    const int chunks = to!int(source["chunks"].integer);
+    const RenderParams s = createBrotDesc(source);
+
+    const string fpath = "CHUNKED=" ~ to!string(chunks) ~ "_" ~ s.filename ~ "/";
+
+    if (!(workdir ~ "/" ~ fpath).exists) (workdir ~ "/" ~ fpath).mkdir;
+
+    if (s.buddha != BuddhaMode.none) {
+        if (!(workdir ~ "/" ~ to!string(s.buddha) ~ "_" ~ fpath).exists) 
+            (workdir ~ "/" ~ to!string(s.buddha) ~ "_" ~ fpath).mkdir;
+    }
+
+    const int w = cast(int)(s.width / to!double(chunks));
+    const int h = cast(int)(s.height / to!double(chunks));
+    
+    bool needsHighPrecision = s.determinePrecisionMode() == PrecisionMode.arbitrary;
+    
+    if (needsHighPrecision) {
+        uint digits = combinedPrecisionDigitsForParams(s);
+        GMPFloat.setPrecisionDigits(digits + 20);
+        
+        auto originX = GMPFloat(s.originXStr);
+        auto originY = GMPFloat(s.originYStr);
+        auto radius = GMPFloat(s.radiusStr);
+        
+        auto diff = GMPFloat(cast(double)(min(w, h)) / max(w, h));
+        auto chunksGMP = GMPFloat(cast(double)chunks);
+        
+        auto radiusX = (w > h) ? radius / chunksGMP : radius * diff / chunksGMP;
+        auto radiusY = (w < h) ? radius / chunksGMP : radius * diff / chunksGMP;
+        
+        auto half = GMPFloat(cast(double)(chunks / 2 + 2));
+        auto x1 = originX - radiusX * half;
+        auto y1 = originY + radiusY * half;
+        auto two = GMPFloat(2.0);
+        
+        for (int i = 0; i < chunks; i++) {
+            for (int j = 0; j < chunks; j++) {
+                RenderParams ret;
+                ret.width = w;
+                ret.height = h;
+                
+                auto jGMP = GMPFloat(cast(double)j + 0.5);
+                auto iGMP = GMPFloat(cast(double)i + 0.5);
+                auto chunkX = x1 + radiusX * two * jGMP;
+                auto chunkY = y1 - radiusY * two * iGMP;
+                
+                ret.originXStr = chunkX.toString();
+                ret.originYStr = chunkY.toString();
+                
+                auto chunkRadius = (radiusX.toDouble() < radiusY.toDouble()) ? radiusX : radiusY;
+                ret.radiusStr = chunkRadius.toString();
+                
+                try {
+                    ret.originX = to!real(ret.originXStr);
+                    ret.originY = to!real(ret.originYStr);
+                    ret.radius = to!real(ret.radiusStr);
+                } catch (Exception) {
+                    ret.originX = chunkX.toDouble();
+                    ret.originY = chunkY.toDouble();
+                    ret.radius = chunkRadius.toDouble();
+                }
+                
+                ret.dwell = s.dwell;
+                ret.palette = s.palette;
+                ret.multibrotExp = s.multibrotExp;
+                ret.fractalType = s.fractalType;
+                ret.colorfunc = s.colorfunc;
+                ret.buddha = s.buddha;
+                ret.filename = fpath ~ "chunk_" ~ format!"%06d"(i * chunks + j);
+
+                queue ~= ret;
+            }
+        }
+    } else {
+        double diff = cast(double)(min(w, h)) / max(w, h);
+        double radiusX = s.radius * (w > h ? 1 : diff) / cast(double)chunks;
+        double radiusY = s.radius * (w < h ? 1 : diff) / cast(double)chunks;
+
+        double x1 = s.originX - (s.radius * (w > h ? 1 : diff) / cast(double)chunks) * (chunks / 2 + 2);
+        double y1 = s.originY + (s.radius * (w < h ? 1 : diff) / cast(double)chunks) * (chunks / 2 + 2);
+        
+        for (int i = 0; i < chunks; i++) {
+            for (int j = 0; j < chunks; j++) {
+                RenderParams ret;
+                ret.width = w;
+                ret.height = h;
+                ret.originX = x1 + radiusX * 2 * (j + 0.5);
+                ret.originY = y1 - radiusY * 2 * (i + 0.5);
+                ret.radius = min(radiusX, radiusY);
+                
+                ret.originXStr = format!"%.20g"(ret.originX);
+                ret.originYStr = format!"%.20g"(ret.originY);
+                ret.radiusStr = format!"%.20g"(ret.radius);
+
+                ret.dwell = s.dwell;
+                ret.palette = s.palette;
+                ret.multibrotExp = s.multibrotExp;
+                ret.fractalType = s.fractalType;
+                ret.colorfunc = s.colorfunc;
+                ret.buddha = s.buddha;
+                ret.filename = fpath ~ "chunk_" ~ format!"%06d"(i * chunks + j);
+
+                queue ~= ret;
+            }
+        }
+    }
 }
