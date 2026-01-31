@@ -44,6 +44,62 @@ struct BuddhaAccumulator {
         }
         return maxVal;
     }
+
+    int percentileHits(double percentile) {
+        import std.algorithm : sort;
+        import std.array : array;
+        
+        int[] hits;
+        foreach (row; globalData) {
+            foreach (val; row) {
+                if (val > 0) {
+                    hits ~= val;
+                }
+            }
+        }
+        
+        if (hits.length == 0) return 0;
+        
+        hits.sort();
+        
+        size_t idx = cast(size_t)((hits.length - 1) * percentile);
+        if (idx >= hits.length) idx = hits.length - 1;
+        
+        return hits[idx];
+    }
+    
+    double averageBackgroundHits() {
+        long totalHits = 0;
+        int nonZeroCount = 0;
+        
+        foreach (row; globalData) {
+            foreach (val; row) {
+                if (val > 0) {
+                    totalHits += val;
+                    nonZeroCount++;
+                }
+            }
+        }
+        
+        if (nonZeroCount == 0) return 0.0;
+        return cast(double)totalHits / nonZeroCount;
+    }
+    
+    int minNonZeroHits() {
+        int minVal = int.max;
+        bool found = false;
+        
+        foreach (row; globalData) {
+            foreach (val; row) {
+                if (val > 0) {
+                    if (val < minVal) minVal = val;
+                    found = true;
+                }
+            }
+        }
+        
+        return found ? minVal : 0;
+    }
     
     ref int[][] data() { return globalData; }
 }

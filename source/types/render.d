@@ -29,6 +29,7 @@ struct RenderConfig {
     
     FractalType fractalType = FractalType.mandelbrot;
     float multibrotExp = 2.0;
+    bool legacyIteration = false;
     
     PrecisionMode precisionMode = PrecisionMode.standard;
     uint arbitraryPrecision = 50;

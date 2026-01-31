@@ -53,11 +53,12 @@ struct MPFRPixelConverter {
         auto pyCenter = GMPFloat(cast(double)py + 0.5);
         
         auto onePlusDi = GMPFloat(1.0 + di);
+        auto onePlusDr = GMPFloat(1.0 + dr);
+        
         auto term1 = pxCenter * pixelSize;
         auto term2 = radius * onePlusDi;
         auto cReal = term1 + originX - term2;
         
-        auto onePlusDr = GMPFloat(1.0 + dr);
         auto term3 = pyCenter * pixelSize;
         auto negTerm3 = -term3;
         auto term4 = radius * onePlusDr;
@@ -66,23 +67,25 @@ struct MPFRPixelConverter {
         result.re = cReal;
         result.im = cImag;
     }
-
+    
     import std.typecons : Tuple;
     alias Coord = Tuple!(int, int);
     
     Coord complexToPixel(string crStr, string ciStr) const {
         import std.math : round;
+        import std.algorithm : min, max;
         
         auto cr = GMPFloat(crStr);
         auto ci = GMPFloat(ciStr);
         
         auto onePlusDi = GMPFloat(1.0 + di);
-        auto term1 = cr - originX + radius * onePlusDi;
-        auto pxF = term1 / pixelSize;
+        auto negOriginX = -originX;
+        auto term1 = cr + negOriginX + radius * onePlusDi;
+        auto pxF = term1 / pixelSize - GMPFloat(0.5);
         
         auto onePlusDr = GMPFloat(1.0 + dr);
-        auto term2 = originY + radius * onePlusDr - ci;
-        auto pyF = term2 / pixelSize;
+        auto term2 = ci - originY + radius * onePlusDr;
+        auto pyF = GMPFloat(cast(double)height) - (term2 / pixelSize) - GMPFloat(0.5);
         
         int px = cast(int)round(pxF.toDouble());
         int py = cast(int)round(pyF.toDouble());

@@ -11,13 +11,15 @@ struct IterParams {
     double escapeRadius2 = 65536.0;
     FractalType fractalType = FractalType.mandelbrot;
     float multibrotExp = 2.0;
+    bool legacyIteration = false;
     
     static IterParams fromConfig(const ref RenderConfig cfg) {
         IterParams p;
         p.maxIterations = cfg.maxIterations;
-        p.escapeRadius2 = 65536.0;
+        p.escapeRadius2 = cfg.escapeRadius * cfg.escapeRadius;
         p.fractalType = cfg.fractalType;
         p.multibrotExp = cfg.multibrotExp;
+        p.legacyIteration = cfg.legacyIteration;
         return p;
     }
 }

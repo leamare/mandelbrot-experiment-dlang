@@ -46,6 +46,9 @@ struct RenderParams {
     
     int x_px_offset = 0;
     int y_px_offset = 0;
+
+    double escapeRadius = 4.0;
+    bool legacyIteration = false;
     
     RenderConfig toRenderConfig() const {
         RenderConfig cfg;
@@ -60,7 +63,7 @@ struct RenderParams {
         cfg.radiusStr = radiusStr;
         
         cfg.maxIterations = dwell;
-        cfg.escapeRadius = 4.0;
+        cfg.escapeRadius = escapeRadius;
         
         cfg.colorFunc = colorfunc;
         cfg.paletteSize = palette > 0 ? palette : dwell;
@@ -71,6 +74,7 @@ struct RenderParams {
         cfg.fractalType = fractalType;
         cfg.multibrotExp = multibrotExp;
         cfg.buddhaMode = buddha;
+        cfg.legacyIteration = legacyIteration;
         
         cfg.precisionMode = determinePrecisionMode();
         
@@ -104,6 +108,13 @@ struct RenderParams {
         uint digits = combinedPrecisionDigits(originXStr, originYStr, radiusStr, radius);
         
         import precision.constants : PRECISION_THRESHOLD_DOUBLE, PRECISION_THRESHOLD_QUADDOUBLE;
+        
+        if (fractalType == FractalType.multibrot && multibrotExp != 2.0) {
+            if (digits > PRECISION_THRESHOLD_DOUBLE) {
+                return PrecisionMode.arbitrary;
+            }
+        }
+
         if (digits > PRECISION_THRESHOLD_QUADDOUBLE) {
             return PrecisionMode.arbitrary;
         } else if (digits > PRECISION_THRESHOLD_DOUBLE) {

@@ -205,17 +205,31 @@ private Color4f gradientColor(double iterD, const ref RenderConfig cfg, bool rev
   }
 }
 
-Color4f computeBuddhaColor(int hitCount, int maxHitCount) {
-    if (maxHitCount == 0 || hitCount == 0) return Color4f(0, 0, 0);
+Color4f computeBuddhaColor(int hitCount, int backgroundLevel, int maxLevel) {
+    if (maxLevel == 0 || hitCount == 0) return Color4f(0, 0, 0);
     
-    double logHit = log(1.0 + hitCount);
-    double logMax = log(1.0 + maxHitCount);
+    if (hitCount <= backgroundLevel) {
+        return Color4f(0, 0, 0);
+    }
     
-    double normalized = logHit / logMax;
+    double range = cast(double)(maxLevel - backgroundLevel);
+    if (range <= 0) return Color4f(0, 0, 0);
+    
+    double normalized = cast(double)(hitCount - backgroundLevel) / range;
+    
+    if (normalized > 1.0) normalized = 1.0;
+    if (normalized < 0.0) normalized = 0.0;
+    
+    double logHit = log(1.0 + cast(double)(hitCount - backgroundLevel));
+    double logMax = log(1.0 + range);
+    double logNormalized = logHit / logMax;
+    
+    normalized = normalized * 0.3 + logNormalized * 0.7;
     
     double c = pow(normalized, 0.5);
     
     if (c > 1) c = 1;
+    if (c < 0) c = 0;
     
     return Color4f(cast(float)c, cast(float)c, cast(float)c);
 }

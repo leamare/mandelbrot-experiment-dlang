@@ -77,7 +77,7 @@ IterResult iterateDoubleComplex(double cx, double cy, IterParams params) {
                 break;
                 
             case FractalType.multibrot:
-                iterateMultibrotStep(zx, zy, cx, cy, params.multibrotExp);
+                iterateMultibrotStep(zx, zy, cx, cy, params.multibrotExp, params);
                 break;
         }
         
@@ -91,7 +91,7 @@ IterResult iterateDoubleComplex(double cx, double cy, IterParams params) {
 }
 
 private void iterateMultibrotStep(ref double zx, ref double zy, 
-                                  double cx, double cy, float exponent) {
+                                  double cx, double cy, float exponent, IterParams params) {
     if (exponent == 2.0) {
         double newZy = 2.0 * zx * zy + cy;
         zx = zx * zx - zy * zy + cx;
@@ -154,13 +154,15 @@ ComplexD pixelToComplex(int px, int py, const ref RenderConfig cfg) {
     
     const auto pixelSize = cfg.radius * 2 / min(cfg.width, cfg.height);
     
-    double cr = (cast(double)px * pixelSize) - (-cfg.originX + cfg.radius * (1 + di));
-    double ci = -(cast(double)py * pixelSize) + (cfg.originY + cfg.radius * (1 + dr));
+    double cr = ((cast(double)px + 0.5) * pixelSize) - (-cfg.originX + cfg.radius * (1 + di));
+    double ci = -((cast(double)py + 0.5) * pixelSize) + (cfg.originY + cfg.radius * (1 + dr));
     
     return ComplexD(cr, ci);
 }
 
 Coord complexToPixel(double cr, double ci, const ref RenderConfig cfg) {
+    import std.algorithm : min, max;
+    
     double di, dr;
     
     if (cfg.width == cfg.height) {
@@ -174,8 +176,9 @@ Coord complexToPixel(double cr, double ci, const ref RenderConfig cfg) {
     
     const auto pixelSize = cfg.radius * 2 / min(cfg.width, cfg.height);
     
-    int px = cast(int)(round((cr + (-cfg.originX) + cfg.radius * (1 + di)) / pixelSize));
-    int py = cast(int)(round(cfg.height - (ci - cfg.originY + cfg.radius * (1 + dr)) / pixelSize));
+    int px = cast(int)(round((cr + (-cfg.originX) + cfg.radius * (1 + di)) / pixelSize - 0.5));
+    
+    int py = cast(int)(round(cast(double)cfg.height - (ci - cfg.originY + cfg.radius * (1 + dr)) / pixelSize - 0.5));
     
     return Coord(px, py);
 }
@@ -193,37 +196,47 @@ OrbitResult iterateWithOrbit(int px, int py, const ref RenderConfig cfg) {
     const double cr = c[0];
     const double ci = c[1];
     
-    double zr = 0;
-    double zi = 0;
-    double zrTemp;
-    int iter;
+    double zx = 0.0;
+    double zy = 0.0;
+    double zx2 = 0.0;
+    double zy2 = 0.0;
     
-    const double escapeRadius = 1 << 16;
+    int iter = 0;
+    auto params = IterParams.fromConfig(cfg);
     
-    if (cfg.fractalType == FractalType.ship) {
-        for (iter = 0; zr*zr + zi*zi <= escapeRadius && iter < cfg.maxIterations; iter++) {
-            zrTemp = zr*zr - zi*zi + cr;
-            zi = abs(2*zr*zi) + ci;
-            zr = zrTemp;
-            result.orbit ~= ComplexD(zr, zi);
+    while (iter < params.maxIterations && (zx2 + zy2) < params.escapeRadius2) {
+        final switch (params.fractalType) {
+            case FractalType.mandelbrot:
+                double newZy = 2.0 * zx * zy + ci;
+                zx = zx2 - zy2 + cr;
+                zy = newZy;
+                break;
+                
+            case FractalType.ship:
+                double absZy = abs(2.0 * zx * zy) + ci;
+                zx = zx2 - zy2 + cr;
+                zy = absZy;
+                break;
+                
+            case FractalType.mandelbar:
+                double conjZy = -2.0 * zx * zy + ci;
+                zx = zx2 - zy2 + cr;
+                zy = conjZy;
+                break;
+                
+            case FractalType.multibrot:
+                iterateMultibrotStep(zx, zy, cr, ci, params.multibrotExp, params);
+                break;
         }
-    } else {
-        for (iter = 0; zr*zr + zi*zi <= escapeRadius && iter < cfg.maxIterations; iter++) {
-            zrTemp = zr*zr - zi*zi + cr;
-            zi = 2*zr*zi + ci;
-            zr = zrTemp;
-            result.orbit ~= ComplexD(zr, zi);
-        }
+        
+        zx2 = zx * zx;
+        zy2 = zy * zy;
+        iter++;
+        
+        result.orbit ~= ComplexD(zx, zy);
     }
     
-    double smoothed = iter;
-    if (iter < cfg.maxIterations) {
-        const double logZn = log(zr*zr + zi*zi) * 0.5;
-        const double nu = log(logZn / log(2.0)) / log(2.0);
-        smoothed = 1 + iter - nu;
-    }
-    
+    double smoothed = smoothIterations(iter, zx2 + zy2, params.maxIterations);
     result.iter = IterResult(iter, smoothed);
     return result;
 }
-

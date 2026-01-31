@@ -166,12 +166,29 @@ void brotFlow(RenderParams desc) {
     if (desc.buddha != BuddhaMode.none && buddhaResult.maxHits > 0) {
         SuperImage buddhaImg = image(desc.width, desc.height);
         
+        double avgBackground = buddhaResult.accumulator.averageBackgroundHits();
+        int backgroundLevel = cast(int)avgBackground;
+        
+        int minNonZero = buddhaResult.accumulator.minNonZeroHits();
+        if (minNonZero > 0 && (backgroundLevel == 0 || minNonZero < backgroundLevel)) {
+            backgroundLevel = minNonZero;
+        }
+        
+        int maxLevel = buddhaResult.maxHits;
+        
         writeln("\nGenerating Buddhabrot image");
-            stdout.flush();
+        writeln("  Background level: ", backgroundLevel, " (avg: ", cast(int)avgBackground, 
+                ", min: ", minNonZero, ")");
+        writeln("  Max level: ", maxLevel);
+        stdout.flush();
         
         foreach (x; 0 .. desc.width) {
             for (int y = 0; y < desc.height; y++) {
-                buddhaImg[x, y] = computeBuddhaColor(buddhaResult.accumulator.data[x][y], buddhaResult.maxHits);
+                buddhaImg[x, y] = computeBuddhaColor(
+                    buddhaResult.accumulator.data[x][y], 
+                    backgroundLevel,
+                    maxLevel
+                );
             }
             if (x % wfactor == 0) {
                 write('.');
@@ -181,7 +198,11 @@ void brotFlow(RenderParams desc) {
         
         string buddhaPrefix = desc.buddha == BuddhaMode.buddha ? "buddha_" : "antibuddha_";
         writeln("\nSaving: " ~ workdir ~ "/" ~ buddhaPrefix ~ desc.filename ~ ".png");
+        
+        auto buddhaSaveTimer = StopWatch(AutoStart.yes);
         savePNG(buddhaImg, workdir ~ "/" ~ buddhaPrefix ~ desc.filename ~ ".png");
+        buddhaSaveTimer.stop();
+        writeln("Save time: ", formatDuration(buddhaSaveTimer.peek()));
     }
     
     SuperImage img = image(desc.width, desc.height);

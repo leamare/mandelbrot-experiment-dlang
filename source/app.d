@@ -24,6 +24,7 @@ int main(string[] args) {
 
     bool buddha = false;
     bool antibuddha = false;
+    bool legacyIteration = false;
 
     string filename = "";
     string flowlist = "";
@@ -35,6 +36,7 @@ int main(string[] args) {
     string originXArg = "";
     string originYArg = "";
     string radiusArg = "";
+    double escapeRadiusArg = 0.0;
 
     auto helpInformation = getopt(
         args,
@@ -53,6 +55,8 @@ int main(string[] args) {
         "type|t", "Fractal type (mandelbrot, multibrot, ship, mandelbar), mandelbrot by default", &cli.fractalType,
         "colorfunc|c", "Color palette (ultrafrac, hsv, gray, fire, etc.) or custom palette name from palettes/", &colorFuncArg,
         "exponent|e", "Multibrot exponent, 2.0 by default", &cli.multibrotExp,
+        "escaperadius|q", "Escape radius threshold (|z|^2 > escapeRadius^2), 4.0 by default", &escapeRadiusArg,
+        "legacyiteration|v", "Legacy iteration mode (old-style negative exponent multibrot + inverted coloring)", &legacyIteration,
         "progress|s", "Save results to a separate file while working/import progress on load if found\n" ~
                                     "\t-1 for default block size (by percentage of lines), or any other int 1-50", &flow.saveProgress,
         "flowlist|f", "JSON list of things to generate", &flowlist,
@@ -86,6 +90,9 @@ int main(string[] args) {
     if (radiusArg.length > 0) {
         cli.radiusStr = radiusArg;
         try { cli.radius = to!real(radiusArg); } catch (Exception) {}
+    }
+    if (escapeRadiusArg > 0.0) {
+        cli.escapeRadius = escapeRadiusArg;
     }
 
     if (colorFuncArg.length > 0) {
@@ -159,6 +166,8 @@ int main(string[] args) {
 
         if (buddha) cli.buddha = BuddhaMode.buddha;
         else if (antibuddha) cli.buddha = BuddhaMode.antibuddha;
+
+        if (legacyIteration) cli.legacyIteration = true;
 
         queue ~= cli;
     }

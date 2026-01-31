@@ -166,12 +166,16 @@ RenderParams createBrotDesc(JSONValue s) {
         ret.forcePrecision = s["precision"].str;
     } else if ("precisionMode" in s && s["precisionMode"].type == JSONType.string) {
         ret.forcePrecision = s["precisionMode"].str;
+    } else if ("_precision" in s && s["_precision"].type == JSONType.string) {
+        ret.forcePrecision = s["_precision"].str;
     }
     
     if ("arbitrary_precision_method" in s && s["arbitrary_precision_method"].type == JSONType.string) {
         ret.arbitraryPrecisionMethod = s["arbitrary_precision_method"].str;
     } else if ("arbitraryPrecisionMethod" in s && s["arbitraryPrecisionMethod"].type == JSONType.string) {
         ret.arbitraryPrecisionMethod = s["arbitraryPrecisionMethod"].str;
+    } else if ("_arbitraryPrecisionMethod" in s && s["_arbitraryPrecisionMethod"].type == JSONType.string) {
+        ret.arbitraryPrecisionMethod = s["_arbitraryPrecisionMethod"].str;
     }
     
     if ("zoom" in s) {
@@ -201,6 +205,11 @@ RenderParams createBrotDesc(JSONValue s) {
     if ("dwell" in s && isNonZeroNumber(s["dwell"])) ret.dwell = getJsonInt(s["dwell"]);
     if ("iterations" in s && isNonZeroNumber(s["iterations"])) ret.dwell = getJsonInt(s["iterations"]);
     if ("palette" in s) ret.palette = getJsonInt(s["palette"]);
+    if ("escapeRadius" in s && isNonZeroNumber(s["escapeRadius"])) {
+        ret.escapeRadius = cast(double)getJsonNumber(s["escapeRadius"]);
+    } else if ("escape_radius" in s && isNonZeroNumber(s["escape_radius"])) {
+        ret.escapeRadius = cast(double)getJsonNumber(s["escape_radius"]);
+    }
     if ("paletteOffset" in s) ret.paletteOffset = cast(float)getJsonNumber(s["paletteOffset"]);
     if ("palette_offset" in s) ret.paletteOffset = cast(float)getJsonNumber(s["palette_offset"]);
     if ("palette_reverse" in s && s["palette_reverse"].type == JSONType.true_) {
@@ -270,6 +279,8 @@ RenderParams createBrotDesc(JSONValue s) {
     
     if ("perturbations" in s && s["perturbations"].type == JSONType.string) {
         ret.perturbations = s["perturbations"].str;
+    } else if ("_perturbations" in s && s["_perturbations"].type == JSONType.string) {
+        ret.perturbations = s["_perturbations"].str;
     }
     
     if ("x_px_offset" in s) {
@@ -277,6 +288,20 @@ RenderParams createBrotDesc(JSONValue s) {
     }
     if ("y_px_offset" in s) {
         ret.y_px_offset = getJsonInt(s["y_px_offset"]);
+    }
+        
+    if ("legacyIteration" in s && s["legacyIteration"].type == JSONType.true_) {
+        ret.legacyIteration = true;
+    } else if ("legacy_iteration" in s && s["legacy_iteration"].type == JSONType.true_) {
+        ret.legacyIteration = true;
+    } else if ("invertColoring" in s && s["invertColoring"].type == JSONType.true_) {
+        ret.legacyIteration = true;
+    } else if ("invertMultibrotColoring" in s && s["invertMultibrotColoring"].type == JSONType.true_) {
+        ret.legacyIteration = true;
+    } else if ("invertMultibrot" in s && s["invertMultibrot"].type == JSONType.true_) {
+        ret.legacyIteration = true;
+    } else if ("invert_multibrot" in s && s["invert_multibrot"].type == JSONType.true_) {
+        ret.legacyIteration = true;
     }
     
     if ("filename" in s && s["filename"].type == JSONType.string) {
